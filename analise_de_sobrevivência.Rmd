@@ -1,0 +1,3589 @@
+---
+title: "Analise de sobrevia (PIBIC)"
+author: "fabio"
+date: "2025-05-05"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+editor: visual
+---
+
+```{r, echo = F, warning= F, message= F}
+library(pacman)
+# Lista de pacotes
+pacotes <- c(
+  "survival", "scales", "parfm", "tidyr", "muhaz", "rms", "summarytools", 
+  "flexsurv", "ggRandomForests", "survminer", "readr", "readxl", "dplyr", 
+  "ggplot2", "fBasics", "questionr", "timereg", "pracma", "tidyverse", 
+  "lmtest", "GGally", "randomForestSRC", "gridExtra", "kableExtra", 
+  "plotly", "survcomp", "dplyr"
+)
+
+suppressMessages(
+  suppressWarnings(
+    tryCatch({
+      invisible(capture.output({
+# Carregar os pacotes
+# Carregar todos de uma vez (instala se faltar)
+pacman::p_load(char = unique(pacotes))
+      }))
+    }, error = function(e) NULL)
+  )
+)
+
+# Carregar pacotes e mostrar mensagens
+# lapply(pacotes, function(pkg){
+#   if(require(pkg, character.only = TRUE)){
+#     message(pkg, " carregado com sucesso!")
+#   } else {
+#     message("Falha ao carregar ", pkg)
+#   }
+# })
+
+```
+
+```{r, echo = F, warning= F, message= F}
+#require("randomSurvivalForest")
+
+#O objetivo deste estudo foi analisar o tempo decorrido
+#entre o diagnóstico de câncer de mama e o óbito de mulheres 
+#acometidas de um hospital especializado no tratamento de câncer
+#no interior do estado.
+
+# carregando os dados -----------------------------------------------------
+
+#dados <- read_excel("analise de sobrevivência (PIBIC).xls") %>%  as.data.frame()
+dados = read_csv("C://Users//fabia//Downloads//Downloads//Downloads//analise de sobrevivência (PIBIC) (2).csv")
+
+
+#variáveis usadas para análise descritiva e modelagem
+dados$TempoConsulta <- as.numeric(dados$TempoConsulta)
+dados$TempoMorte <- as.numeric(dados$TempoMorte)
+dados$TempoCombinado <- as.numeric(dados$TempoCombinado)
+dados$local_fator <- as.factor(dados$local_fator)
+dados$idade_log = log(dados$idade + 1)
+dados$n_de_hormonio_log = log(dados$n_de_hormonio + 1 )
+dados$n_de_quimio_log  = log(dados$n_de_quimio + 1)
+dados$n_de_radio_log = log(dados$n_de_radio + 1)
+dados$terapia_adjuvante_fator <- as.factor(dados$terapia_adjuvante_fator)
+# dados$n_de_hormonio_fator1 = cut(dados$n_de_hormonio,breaks = c(-Inf, 12, Inf), labels = c(0, 1)) %>% as.factor()
+# dados$idade_fator1 = cut(dados$idade,breaks = c(-Inf, 35, Inf), labels = c(0, 1)) %>% as.factor()
+# dados$n_de_radio_fator1 = cut(dados$n_de_radio,breaks = c(-Inf, 18, Inf), labels = c(0, 1)) %>% as.factor()
+# dados$n_de_quimio_fator1 = cut(dados$n_de_quimio,breaks = c(-Inf, 11, Inf), labels = c(0, 1)) %>% as.factor()
+
+# n_de_hormonio
+q <- c(-Inf, 10, Inf)
+dados$n_de_hormonio_fator1 <- cut(
+  dados$n_de_hormonio,
+  breaks = q,
+  include.lowest = TRUE,
+  labels = c("0","1")
+) %>% as.factor()
+
+# idade
+q <- c(-Inf, 35, Inf)
+dados$idade_fator1 <- cut(
+  dados$idade,
+  breaks = q,
+  include.lowest = TRUE,
+  labels = c("0","1")
+) %>% as.factor()
+
+# n_de_radio
+q <- c(-Inf, 15, Inf)
+dados$n_de_radio_fator1 <- cut(
+  dados$n_de_radio,
+  breaks = q,
+  include.lowest = TRUE,
+  labels = c("0","1")
+) %>% as.factor()
+# n_de_quimio
+q <- c(-Inf, 15, Inf)
+dados$n_de_quimio_fator1 <- cut(
+  dados$n_de_quimio,
+  breaks = q,
+  include.lowest = TRUE,
+  labels = c("0","1")
+) %>% as.factor()
+
+
+dados_tratemnto_simples <- subset(dados, terapia_adjuvante %in% c("H", "Q", "R"))
+dados_tratemnto_duplo <- subset(dados, terapia_adjuvante %in% c("RQ","QH","RH"))
+dados_tratemnto_triplo <- subset(dados, terapia_adjuvante %in% c("QRH", "RQH"))
+
+suppressMessages(
+  suppressWarnings(
+    tryCatch({
+      invisible(capture.output({
+# Carregar os pacotes
+attach(dados);
+      }))
+    }, error = function(e) NULL)
+  )
+)
+
+```
+
+```{r, echo = F, warning= F, message= F}
+
+# Selecionar colunas e calcular estatísticas
+descritiva2 <- dados %>%
+  select(n_de_hormonio, n_de_quimio, n_de_radio, idade) %>%
+  fBasics::basicStats() %>%
+  round(2)
+
+# Filtrar as linhas desejadas
+descritiva2 <- descritiva2[-c(1,2, 9, 10, 11, 12, 13, 15, 16), ]
+
+# Transpor para que as variáveis fiquem como linhas
+descritiva2 <- as.data.frame(t(descritiva2))
+descritiva2 <- tibble::rownames_to_column(descritiva2, var = "Variável")
+
+# Renomear as variáveis (linhas)
+descritiva2 <- descritiva2 %>%
+  mutate(
+    Variável = recode(
+      Variável,
+      "n_de_hormonio" = "Nº de Hormonoterapia",
+      "n_de_quimio"   = "Nº de Quimioterapia",
+      "n_de_radio"    = "Nº de Radioterapia",
+      "idade"         = "Idade"
+    )
+  )
+
+# Renomear as colunas (estatísticas)
+descritiva2 <- descritiva2 %>%
+  rename(
+    Média      = Mean,
+    Mediana    = Median,
+    Mínimo     = Minimum,
+    Máximo     = Maximum,
+    `Desvio Padrão` = Stdev,
+    `1 Quartil`     = "1. Quartile",
+    `3 Quartil`     = "3. Quartile"
+  )
+
+# Criar tabela HTML estilizada
+descritiva2 %>%
+  kable(
+    caption = "Estatísticas Descritivas",
+    align = c("l", rep("c", ncol(descritiva2) - 1)),
+    format = "html",
+    escape = FALSE
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 16
+  ) %>%
+  row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "4cm") %>%
+  add_header_above(
+    c(" " = 1, "Estatísticas Descritivas" = ncol(descritiva2) - 1),
+    background = "#34495e", color = "white"
+  )
+
+
+```
+
+#### A análise descritiva das medidas clínicas evidencia padrões importantes na distribuição das variáveis estudadas. O **número de sessões de hormonioterapia** apresenta mediana de 12, com a maioria dos pacientes recebendo entre 0 e 58 sessões. De forma semelhante, o **número de ciclos de quimioterapia** apresenta mediana de 2.5 seções, em constrante com a média que foi de apenas 8.77 seções. O **número de sessões de radioterapia** mostra distribuição semelhante a de **hormonioterapia**, com mediana de 26,44 e intervalo interquartil entre 0 e 90, refletindo variação moderada no tratamento aplicado. Quanto à **idade**, observa-se que a maioria dos pacientes encontra-se entre 30 e 89 anos, com mediana de 58,56 anos e alguns casos extremos representando pacientes mais jovens ou mais idosos. Em geral, a análise descritiva evidencia que a distribuição das variáveis clínicas é relativamente heterogênea, com algumas tendências centrais bem definidas e presença de valores atípicos, permitindo identificar padrões de tratamento e características da população estudada.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+
+# Seleção e renomeação das variáveis
+dados2 <- dados %>%
+  select(
+    status, terapia_adjuvante, terapia_adjuvante_fator, 
+    local_E, local_D, local_fator, 
+    n_de_hormonio, n_de_quimio, n_de_radio, idade
+  ) %>% 
+  as.data.frame()
+
+colnames(dados2) <- c(
+  "Status",
+  "Tipo de Terapia",
+  "Nível da Terapia",
+  "Localização: Mama Esquerda",
+  "Localização: Mama Direita",
+  "Localização do Câncer de Mama",
+  "Nº de Hormônioterapia",
+  "Nº de Quimioterapia",
+  "Nº de Radioterapia",
+  "Idade"
+)
+
+# Pivotar para formato longo
+dados2_long <- dados2 %>%
+  pivot_longer(
+    cols = c("Nº de Hormônioterapia", "Nº de Quimioterapia", "Nº de Radioterapia", "Idade"),
+    names_to = "Variável",
+    values_to = "Valor"
+  )
+
+# Transformar Status em texto para legenda
+dados2_long$Status <- ifelse(dados2_long$Status==0, "Não Censurado", "Censurado")
+
+# Boxplot interativo com Plotly
+library(plotly)
+
+plot_ly(
+  dados2_long, 
+  x = ~Variável, 
+  y = ~Valor, 
+  color = ~Status, 
+  colors = c("blue", "red"),
+  type = "box",
+  boxmode = "group"
+) %>%
+  layout(
+    title = list(
+      text = "Boxplot de Variáveis Subdivididas por Status de Censura",
+      font = list(size = 24)  # tamanho do título
+    ),
+    yaxis = list(
+      title = list(text = "Valor observado", font = list(size = 18)), # eixo Y
+      tickfont = list(size = 17)  # números do eixo Y
+    ),
+    xaxis = list(
+      title = list(text = "", font = list(size = 18)), # eixo X
+      tickfont = list(size = 17)  # rótulos do eixo X
+    ),
+    legend = list(
+      font = list(size = 17)  # tamanho da legenda
+    ),
+    boxmode = "group"
+  )
+
+
+```
+
+#### A análise dos boxplots das variáveis “Nº de Hormonioterapia”, “Nº de Quimioterapia”, “Nº de Radioterapia” e “Idade” em função do status de censura permite visualizar diferenças na distribuição dessas características entre pacientes não censurados em relação aos censurados. Observa-se que a mediana do número de sessões de hormonioterapia foi levemente maior nos pacientes não censurados, sugerindo que aqueles que tiveram o evento podem ter recebido mais hormonioterapia. O intervalo interquartil para esse level da variável é mais amplo nesse grupo, indicando maior variabilidade, com alguns pacientes apresentando valores extremos, no enteanto não se caracteriza como outliers. Em relação à quimioterapia, a mediana de ciclos também tende a ser maior nos pacientes censurados, e a dispersão sugere que a maioria recebeu um número moderado de ciclos, embora existam outliers com número excepcionalmente alto no grupo de não censurados. Para radioterapia, a mediana do número de sessões mostra tendência similar, com pacientes censurados recebendo ligeiramente mais sessões, e destque para um caso extremo (outliers) que se destacam caso de exposição elevada de seções. Quanto à idade, a mediana nos pacientes não censurados é ligeiramente superior à dos censurados, indicando possível associação entre maior idade e ocorrência do evento, enquanto a dispersão maior nos pacientes censurados evidencia diversidade etária.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# Transformar Localização do Câncer de Mama em fator com labels
+dados2_long$`Localização do Câncer de Mama` <- factor(
+  dados2_long$`Localização do Câncer de Mama`,
+  levels = c(0, 1, 2),
+  labels = c("Apenas Mama Esquerda", "Apenas Mama Direita", "Ambas as Mamas"))
+
+# Boxplot interativo com Plotly
+plot_ly(
+  dados2_long, 
+  x = ~Variável, 
+  y = ~Valor, 
+  color = ~`Localização do Câncer de Mama`, 
+  colors = c("#1B9E77", "#D95F02", "#7570B3"),
+  type = "box",
+  boxmode = "group" # faz as caixas ficarem lado a lado
+) %>% 
+  layout(
+    title = list(
+      text = "Boxplot de Variáveis Subdivididas por Status de Censura",
+      font = list(size = 24)  # tamanho do título
+    ),
+    yaxis = list(
+      title = list(text = "Valor observado", font = list(size = 18)), # eixo Y
+      tickfont = list(size = 16)  # números do eixo Y
+    ),
+    xaxis = list(
+      title = list(text = "", font = list(size = 18)), # eixo X
+      tickfont = list(size = 16)  # rótulos do eixo X
+    ),
+    legend = list(
+      font = list(size = 17)  # tamanho da legenda
+    ),
+    boxmode = "group"
+  )
+
+```
+
+#### A análise dos boxplots das variáveis “Nº de Hormonioterapia”, “Nº de Quimioterapia”, “Nº de Radioterapia” e “Idade” em função do do nivel de localização do tumor na mama permite visualizar diferenças na distribuição assim como no caso anterior. Quanto à idade, a mediana nos pacientes com tumor esquerdo é ligeiramente superior à grupo com tumor na duas mamas, diferentemente do grupo com tumor direito que apresenta uma cerca diferença na mediana cerca de 55 anos de idade, isso sugere que esse grupo cerca de 50% das observações tinham idade inferior a 55 anos, mais jovem se comparado aos demais níveis para mesma variável que tem a idade supeior a 60 anos. Observa-se que a mediana do número de sessões de hormonioterapia foi levemente maior nos pacientes que tem o câncer localizado apenas na mama direita, sugerindo que aqueles que tiveram o evento podem ter recebido mais hormonioterapia. O intervalo interquartil para esse nível da variável é mais amplo nesse grupo com uma observação tendo apresentando um número de 109 seções, indicando maior variabilidade, os grupos pacientes que estão localizados nos demais níveis apresentão varibalidades similares com a diferença apenas na mediana, que é maior no grupo onde a localização da mama esquerda em comparação em ambas as mamas. Em relação à quimioterapia, a mediana de ciclos também tende a ser maior nos pacientes que possuem o câncer na mama direita cerca de 50% dos pacientes tiveram menos que 5 seções isso indica o quao rigoso é o tratamento se comparado a homonioterapaia, e a dispersão sugere que a maioria recebeu um número menor de ciclos, ou seja, 75% apresentaram um número de 18 seções ao todo, também observamos um outlier com número excepcionalmente alto de 67 seções. Para radioterapia, a mediana do número de sessões mostra tendência similar, com pacientes com câncer na mama direita ligeiramente a mediana mais alta com cerca de 27 seções, e destaque para um caso extremo (outliers) que se destacam caso de exposição elevada de seções cerca de 90 seções.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+#dados2$`Localização: Mama Esquerda` = ifelse(dados2$`Localização: Mama Esquerda` == 1, "Sim", "Não")
+#dados2$`Localização: Mama Direita` = ifelse(dados2$`Localização: Mama Direita` == 1, "Sim", "Não")
+dados2$`Nível da Terapia` = ifelse(dados2$`Nível da Terapia` == 0, "Simples",
+                                   ifelse(dados2$`Nível da Terapia` == 1, "Duplo",
+                                          ifelse(dados2$`Nível da Terapia` == 2, "Tripla", "Não informado")))
+dados2$`Localização do Câncer de Mama` = ifelse(dados2$`Localização do Câncer de Mama` == 0, "Direita",
+                                      ifelse(dados2$`Localização do Câncer de Mama` == 1, " Esquerda",
+                                             ifelse(dados2$`Localização do Câncer de Mama` == 2, "Ambas", "Não informado")))
+dados2$`Status` = ifelse(dados2$`Status` == 1, "Censurado", "Não Censurado")
+
+
+# Calcular frequência relativa para cada variável
+dados2_freq <- dados2 %>%
+  mutate(across(c(`Status`,`Nível da Terapia`,`Localização do Câncer de Mama`)
+                , as.factor)) %>%
+  pivot_longer(
+    cols = c(`Status`,`Nível da Terapia`,`Tipo de Terapia`,`Localização do Câncer de Mama`),
+    names_to = "variavel",
+    values_to = "status"
+  ) %>%
+  group_by(variavel, status) %>%  
+  summarise(
+    contagem = n(),              
+    .groups = "drop"
+  ) %>%
+  group_by(variavel) %>%        
+  mutate(
+    frequencia_relativa = contagem / sum(contagem)  
+  ) %>%
+  ungroup()
+
+ggplot(dados2_freq) +
+  geom_col(aes(x = status, y = contagem), fill = 'blue') +
+  facet_wrap(~variavel, scales = "free") +  # Gráficos separados por variável
+  geom_text(aes(x = as.factor(status), y = contagem , 
+                label = scales::percent(frequencia_relativa, accuracy = 0.1) ), 
+            vjust = -0.5, hjust = 0.5, size = 4) +  # Exibe os percentuais acima das barras
+  labs(title = "Gráfico de barras para as Variaveis Localização, Status e Terapia",
+       x = " ", y = "Frequência Absoluta") +
+  # scale_color_manual(name = "Status de Censura", 
+  #                     values = c("0" = "blue", "1" = "red"), 
+  #                     labels = c("Não censurados","Censurados")) ++
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, size = 14, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+```
+
+#### A análise dos gráficos de barras permite observar diferenças na distribuição das variáveis. Em relação ao **Status**, verificou-se que aproximadamente 77% dos pacientes são de não censurados, enquanto 23% foram censurados, o que já fornece uma visão inicial sobre a proporção de eventos na amostra. Considerando o **“Tipo de Terapia”**, nota-se que o tratamento combinado de **(rádio, quimio e hormonioterapia)** foi o mais utilizado no geral, estando presente em cerca de 33% dos pacientes, enquanto a **(rádioterapia ou rádioterapia seguido pela quimioterapia)** apresentaram respectivamente cerca de 21% e 18% dos pacientes isso indica a preferencia pelo tratamento na maioria dos casos. Quanto ao **“Nível da Terapia”**, a maioria dos pacientes optaram pelo o tratamento duplo , sugerindo que regimes mais intensivos foram aplicados a quem apresentou o evento Nas variáveis relacionadas à **localização do câncer de mama**, observa-se que a **mama esquerda** foi o local mais frequente entre os indivíduos cerca (50%), enquanto a **mama direita** apareceu em 47% e uma minoria em **ambas as mamas** cerca de 3%, isso é um indicativo que normalmente oi tumor nas duas mamas é considerado mais difícil e ocorrer.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+# Criar o gráfico ggpairs com cores baseadas na variável 'status' e demais fatores
+dados3 <- dados2 %>%
+  select(`Nível da Terapia`, Status); 
+dados4 <- dados2 %>%
+  select(`Tipo de Terapia`, Status);
+# dados5 <- dados2 %>%
+#   select(`Localização: Mama Esquerda`, Status);  as.factor(dados5$`Localização: Mama Esquerda`)
+# dados6 <- dados2 %>%
+#   select(`Localização: Mama Direita`, Status) ; as.factor(dados6$`Localização: Mama Direita`)
+dados7 <- dados2 %>%
+  select(`Localização do Câncer de Mama`, Status) ;
+# Criar os gráficos ggpairs
+bar_percent <- function(data, mapping, ...) {
+  ggplot(data, mapping) +
+    geom_bar(aes(y = after_stat(count) / sum(after_stat(count)) * 100), stat = "count") +
+    geom_text(aes(y = after_stat(count) / sum(after_stat(count)) * 100, 
+                  label = percent(after_stat(count) / sum(after_stat(count)), accuracy = 0.1)), 
+              stat = "count") +
+    scale_fill_hue(direction = -1) +
+    ylab("Percentual (%)") +
+    xlab("") +
+    theme(legend.position = "none")
+}
+
+tema = theme(strip.text.y = element_blank(),
+            axis.text.x = element_text(angle = 45, size = 14, hjust = 1),
+             strip.text = element_text(size = 14),
+             axis.text.y = element_text(size = 14),
+             axis.title.x = element_text(size = 14),
+             axis.title.y = element_text(size = 14),
+             legend.text = element_text(size = 14),
+             legend.title = element_text(size = 14),
+             plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+) 
+    
+
+
+# Aplicando a função no ggpairs
+t1 <- ggpairs(dados3, columns = c("Nível da Terapia"),
+              mapping = aes(fill = as.factor(status)),
+              columnLabels = "Nível da Terapia",
+              diag = list(discrete = wrap(bar_percent)),
+              lower = list(discrete = wrap(bar_percent)),
+              upper = list(discrete = wrap(bar_percent))) + theme_bw() + tema
+t2 <- ggpairs(dados4, columns = c("Tipo de Terapia"),
+              mapping = aes(fill = as.factor(status)),
+              columnLabels = ("Tipo de Terapia"),
+              diag = list(discrete = wrap(bar_percent)),
+              lower = list(discrete = wrap(bar_percent)),
+              upper = list(discrete = wrap(bar_percent))) + theme_bw() + tema
+# t3 <- ggpairs(dados5, columns = c("Localização: Mama Esquerda"),
+#               mapping = aes(fill = as.factor(status)),
+#               columnLabels = "Localização: Mama Esquerda",
+#               diag = list(discrete = wrap(bar_percent)),
+#               lower = list(discrete = wrap(bar_percent)),
+#               upper = list(discrete = wrap(bar_percent))) +  theme_bw() + tema
+# t4 <- ggpairs(dados6, columns = c("Localização: Mama Direita"),
+#               mapping = aes(fill = as.factor(status)),
+#               columnLabels = "Localização: Mama Direita",
+#               diag = list(discrete = wrap(bar_percent)),
+#               lower = list(discrete = wrap(bar_percent)),
+#               upper = list(discrete = wrap(bar_percent))) + theme_bw() + tema
+t5 <- ggpairs(dados7, columns = c("Localização do Câncer de Mama"),
+              mapping = aes(fill = as.factor(status)),
+              columnLabels = "Localização do Câncer de Mama",
+              diag = list(discrete = wrap(bar_percent)),
+              lower = list(discrete = wrap(bar_percent)),
+              upper = list(discrete = wrap(bar_percent))) + theme_bw() + tema
+
+# Converter os objetos ggpairs em grobs usando ggplot
+grob1 <- t1 %>% ggmatrix_gtable(); 
+grob2 <- t2 %>% ggmatrix_gtable();
+# grob3 <- t3 %>% ggmatrix_gtable(); 
+# grob4 <- t4 %>% ggmatrix_gtable(); 
+grob5 <- t5 %>% ggmatrix_gtable(); 
+
+# Organizar os gráficos em uma grade 2x2
+library(grid)
+grid.arrange(
+  grob5, grob1, grob2,
+  ncol = 3, nrow = 1,
+  top = textGrob(
+    "Gráfico de barras para as Variáveis Localização e Terapia por Status",
+    gp = gpar(fontsize = 18, fontface = "bold"),
+    just = "center"
+  )
+)
+```
+
+#### A análise dos gráficos de barras com o indicativo do censura permite observar diferenças atraveis dos níveis de **Status (cor vermelha censurados e azul não censurados)**. Em relação avariável relacionadas à **localização do câncer de mama**, observa-se que o percentual de pessoas que tiverem o desfecho de morte em decorrencia do tumor na **mama esquerda** foi o local mais frequente entre os indivíduos cerca (50%), enquanto a **mama direita** apareceu em 47% e uma minoria em **ambas as mamas** cerca de 3%, isso é um indicativo que normalmente oi tumor nas duas mamas é considerado mais difícil e ocorrer. **Status**, verificou-se que aproximadamente 77% dos pacientes são de não censurados, enquanto 23% foram censurados, o que já fornece uma visão inicial sobre a proporção de eventos na amostra. Considerando o **“Tipo de Terapia”**, nota-se que o tratamento combinado de **(rádio, quimio e hormonioterapia)** foi o mais utilizado no geral, estando presente em cerca de 33% dos pacientes, enquanto a **(rádioterapia ou rádioterapia seguido pela quimioterapia)** apresentaram respectivamente cerca de 21% e 18% dos pacientes isso indica a preferencia pelo tratamento na maioria dos casos. Quanto ao **“Nível da Terapia”**, a maioria dos pacientes optaram pelo o tratamento duplo , sugerindo que regimes mais intensivos foram aplicados a quem apresentou o evento.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# #requir
+# # Modificar os nomes das variáveis
+# colnames(dados2)[c(7,8,9,10)] <- c("Nº de Hormônio", "Nº de Quimioterapia", "Nº de Radioterapia", "Idade")
+# ggpairs(dados2[,c(7,8,9,10)], 
+#         aes(color = as.factor(status)),  # Colorir pelo status
+#         upper = list(continuous = wrap("cor", size = 8,method = "spearman")),  # Usar Spearman na parte superior
+#         lower = list(continuous = wrap("points")),  # Gráficos de dispersão na parte inferior
+#         diag = list(continuous = wrap("barDiag"))) + theme_bw() # Diagonal com histogramas
+# 
+# dados8 <- dados %>%
+#   select(status, terapia_adjuvante_fator, 
+#          local_fator, n_de_hormonio, n_de_quimio,
+#          n_de_radio, idade) %>%
+#   mutate(across(everything(), as.numeric)) %>%  # Converte todas as colunas para numérico
+#   as.data.frame()
+# 
+# colnames(dados8) <- c(
+#   "status" = "Status",
+#   "terapia_adjuvante_fator" = "Nível de Terapia",
+#   "local_fator" = "Localização do Câncer de Mama.",
+#   "n_de_hormonio" = "Nº de Hormônio",
+#   "n_de_quimio" = "Nº de Quimioterapia",
+#   "n_de_radio" = "Nº de Radioterapia",
+#   "idade" = "Idade"
+# )
+# 
+# dados8$Status <- factor(dados8$Status, levels = c(1, 0))
+# 
+# ggpairs(dados8[,-c(1,8)], 
+#         aes(color = as.factor(dados8$Status)),  # Colorir pelo status
+#         upper = list(continuous = wrap("cor", size = 8, method = "spearman")),  # Usar Spearman na parte superior
+#         lower = list(continuous = wrap("points")),  # Gráficos de dispersão na parte inferior
+#         diag = list(continuous = wrap("barDiag"))) + theme_bw() +theme(strip.text = element_text(size = 14)) # Diagonal com histogramas
+# 
+# cor(dados8[,-1], method = "spearman", use = "pairwise.complete.obs")
+```
+
+## gráfico de pares (pair plot / scatterplot matrix)
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# Preparar os dados
+dados9 <- dados %>%
+  select(
+ #       status,
+ #       terapia_adjuvante_fator,
+         n_de_hormonio,
+         n_de_quimio,
+         n_de_radio, 
+         idade,
+ #       local_fator
+ ) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.data.frame()
+
+# Renomear colunas
+colnames(dados9) <- c(
+ # "Status", 
+#  "Terapia", 
+  "Hormônioterapia", 
+  "Quimioterapia", 
+  "Radioterapia", 
+  "Idade"
+#  "Local"
+)
+
+# Converter Status para fator
+#dados9$Status <- factor(dados9$Status, levels = c(1, 0), labels = c("Evento", "Censura"))
+
+# Formatação para valores grandes
+label_short <- label_number(scale_cut = cut_short_scale())
+
+# Histograma diagonal formatado
+hist_formatado <- function(data, mapping, ...) {
+  ggplot(data, mapping) +
+    geom_histogram(alpha = 0.6, position = "identity", color = "gray40", bins = 30) +
+    scale_x_continuous(
+      name = as_label(mapping$x),
+      labels = label_short
+    ) +
+    scale_y_continuous(
+      name = "Frequência",
+      labels = label_short
+    ) +
+    scale_fill_hue(direction = -1) +
+    theme_minimal() +
+    theme(
+      axis.text = element_text(size = 16),
+      axis.title = element_text(size = 16)
+    )
+}
+
+# Painel inferior: dispersão
+scatter_custom <- function(data, mapping, ...) {
+  ggplot(data, mapping) +
+    geom_point(alpha = 0.4, size = 2) +
+    scale_x_continuous(labels = label_short) +
+    scale_y_continuous(labels = label_short) +
+    theme_minimal() +
+    theme(
+      axis.text = element_text(size = 16),
+      axis.title = element_blank()
+    )
+}
+
+# Painel superior: correlação
+heatmap_cor_pair <- function(data, mapping, method = "spearman", ...) {
+  x_var <- eval_data_col(data, mapping$x)
+  y_var <- eval_data_col(data, mapping$y)
+  cor_value <- cor(x_var, y_var, method = method, use = "pairwise.complete.obs")
+  
+  ggplot(data.frame(x = "", y = "", cor = cor_value), aes(x, y, fill = cor)) +
+    geom_tile() +
+    geom_text(aes(label = round(cor, 2)), size = 5) +
+    scale_fill_gradient2(low = "darkred", mid = "white", high = "darkblue", midpoint = 0,
+                         limits = c(-1, 1), name = "Correlação") +
+    theme_void() +
+    theme(legend.position = "none")
+}
+
+# ggpairs com Status incluso nos dados, mas excluído das combinações
+grafico_pairs <- ggpairs(
+  dados9,  # agora Status está presente nos dados
+#columns = 2:7,  # seleciona apenas as variáveis numéricas para os painéis
+ # mapping = aes(color = "Status", fill = Status),
+  upper = list(continuous = wrap(heatmap_cor_pair)),
+  lower = list(continuous = wrap(scatter_custom, fill = "black")),
+  diag = list(continuous = wrap(hist_formatado)),
+  progress = F
+) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text = element_text(size = 18) 
+  ) 
+ # labs(color = "Status", fill = "Status")
+
+# Mostrar o gráfico
+print(grafico_pairs)
+
+```
+
+#### De modo geral, o gráfico de pares evidencia simultaneamente a **distribuição individual, as associações bivariadas e os coeficientes de correlação**. A análise do gráfico de pares, que combina histogramas, gráficos de dispersão e coeficientes de correlação, oferece uma visão abrangente das relações entre as variáveis numéricas **(Nº de Hormonioterapia, Nº de Quimioterapia, Nº de Radioterapia e “Idade”)**. Nos histogramas posicionados na diagonal, observa-se que a distribuições exceto idade, tem assimétria só refletindo a natura dos dados de contagem. Por essa razão não foi utilizado a correlação de person (só recomendado em caso de distribibuição normal entre os fatores), a análise de correlção foi utilizado o índice de spearman, sendo estimado de forma não paramétrica.
+
+#### Nos gráficos de dispersão, localizados abaixo da diagonal, verifica-se que não tem numa tendência de associação positiva e negativa clara entre os fatores **número de sessões de Hormonioterapia, Quimioterapia, e radioterapia**, sugerindo que pacientes submetidos a mais ou menos intensidade de Quimioterapia não influenciam em mais ou menos sessões de Hormonioterapia e Radioterapia, demais conbinações também observamos que isso não acontece. A idade também não apresenta associação forte com nehumas das variáveis, a maior apresentada foi (-0.21), embora que de forma significativa e inversamente proporcional, não apresenta forte relação.
+
+#### Na parte superior da matriz, os coeficientes de correlação confirmam que não existe tendências claras: a maior correlação apresentada embora considerada fraca, foi de idade com quimioterapia, demias como podemos ver também não apresenta associação forte com nehumas das variáveis.
+
+## **Curvas de sobrevivência estimada base estimador de Kaplan-Meier estratificada com base na localização**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+# cor_matrix <- cor(dados9[, c(2,5,6,7,8,9)], method = "spearman", use = "pairwise.complete.obs")
+# resultado <- ifelse(abs(cor_matrix) >= 0.5, "Significativo", "Não significativo"); resultado
+
+# Ànalise de sobrevivência ------------------------------------------------
+
+# função de sobrevivência: estimando sem nenhuma variável ------------------------
+fit0 <- survfit(Surv(time = TempoCombinado/365, event = status) ~ 1, data = dados)
+
+#O (~1) indica que não há variáveis independentes no modelo.
+#Em outras palavras, você está modelando a sobrevivência 
+#sem considerar nenhum preditor ou fator de agrupamento.
+# plot(fit1, xlab = "Tempo em (dias)", ylab = "Probabilidade de sobrevivência")
+fit_grafico <- ggsurvplot(
+  fit0,
+  surv.median.line = "hv",
+  conf.int = TRUE,
+  conf.int.style = "ribbon",
+  conf.int.alpha = 0.5,
+  censor.shape = "I",
+  censor.size = 4,
+  ggtheme = theme_bw()
+) + labs(x = "Tempo em (Anos)", y = "Probabilidade",
+         title = "Curva de Sobrevivência", size = 14)
+fit_grafico$plot <- fit_grafico$plot +
+  theme(
+    axis.text.x  = element_text(size = 14),
+    axis.text.y  = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 14),              # mantenha apenas uma
+    legend.key.size = grid::unit(0.3, "cm"),            # use grid::unit()
+    legend.spacing.y = grid::unit(0.1, "cm"),           # use grid::unit()
+    legend.background = element_rect(fill = "white", colour = "black"),
+  #  legend.position = c(1, 1) ,                # dentro do gráfico
+    legend.direction = "horizontal",
+  #  legend.justification = c(1, 1)                      # numérico (direita, topo)
+        legend.position = "none"
+) 
+
+
+
+tempo_mediano <- quantile(fit0, probs = 0.5)$quantile; 
+#tempo_medio <- integrate(approxfun(fit0$time, fit0$surv), lower = 0, upper = max(fit0$time))$value; tempo_medio
+
+library(survival)
+library(survminer)
+library(plotly)
+library(htmltools)
+library(grid)
+library(ggplot2)
+
+# ---- Paleta de cores ----
+color <- c("#1f77b4", "#ff7f0e", "#2ca02c", "red")
+
+# ---- Função para gerar gráfico de sobrevivência com tema ajustado ----
+faz_grafico_local <- function(fit, titulo_legenda, labels_legenda) {
+  g <- ggsurvplot(
+    fit,
+    palette = color,
+    pval = TRUE,
+    conf.int = TRUE,
+    conf.int.alpha = 0.15,
+    ggtheme = theme_bw(),
+    legend.title = titulo_legenda,
+    legend.labs  = labels_legenda,
+    xlab = "Tempo (em Anos)",
+    ylab = "Probabilidade",
+    censor = TRUE
+  )
+  
+  g$plot <- g$plot + 
+    theme(
+      axis.text.x  = element_text(size = 16),
+      axis.text.y  = element_text(size = 16),
+      axis.title.x = element_text(size = 16),
+      axis.title.y = element_text(size = 16),
+      legend.title = element_text(size = 16),
+      legend.text  = element_text(size = 16),
+      legend.key.size   = unit(0.3, "cm"),
+      legend.spacing.y  = unit(0.1, "cm"),
+      legend.background = element_rect(fill = "white", colour = "black"),
+      legend.position   = "top",
+      legend.direction  = "horizontal"
+    )
+  g
+}
+
+# ---- Ajuste dos modelos ----
+fit1 <- npsurv(Surv(as.numeric(TempoCombinado/365), status) ~ local_D, data = dados, type = "kaplan-meier")
+fit2 <- npsurv(Surv(as.numeric(TempoCombinado/365), status) ~ local_E, data = dados, type = "kaplan-meier")
+fit3 <- npsurv(Surv(as.numeric(TempoCombinado/365), status) ~ local_E_D, data = dados, type = "kaplan-meier", conf.type = "log-log")
+fit4 <- survfit(Surv(as.numeric(TempoCombinado/365), status) ~ local_fator, data = dados, conf.type = "log-log")
+
+# ---- Criação dos gráficos ----
+fit1_grafico <- faz_grafico_local(fit1, "Mama direita:", c("não possui","possui"))
+fit2_grafico <- faz_grafico_local(fit2, "Mama esquerda:", c("não possui","possui"))
+fit3_grafico <- faz_grafico_local(fit3, "Ambas as mamas:", c("não possui","possui"))
+fit4_grafico <- faz_grafico_local(fit4, "Cancer na mama:", c("Direita","Esquerda","Ambas as Mamas"))
+
+# ---- Função para ajustar legenda do plotly ----
+ajusta_legenda_plotly <- function(p) {
+  ggplotly(p$plot) %>%
+    layout(
+      legend = list(
+        orientation = "h",
+        x = 0.5, xanchor = "center",
+        y = 1.15,
+        font = list(size = 11)
+      )
+    )
+}
+
+p1 <- ajusta_legenda_plotly(fit1_grafico)
+p2 <- ajusta_legenda_plotly(fit2_grafico)
+p3 <- ajusta_legenda_plotly(fit3_grafico)
+p4 <- ajusta_legenda_plotly(fit4_grafico)
+
+# ---- Layout 2x2 responsivo ----
+browsable(
+  tagList(
+    tags$div(
+      style = "
+        display: flex; 
+        flex-wrap: wrap; 
+        gap: 14px; 
+        justify-content: center;
+      ",
+      tags$div(style = "flex: 1 1 45%; min-width: 300px;", p1),
+      tags$div(style = "flex: 1 1 45%; min-width: 300px;", p2),
+      tags$div(style = "flex: 1 1 45%; min-width: 300px;", p3),
+      tags$div(style = "flex: 1 1 45%; min-width: 300px;", p4)
+    )
+  )
+)
+
+
+
+
+```
+
+#### A análise das curvas de sobrevivência, estratificadas de acordo com a **localização do câncer de mama**, permite avaliar se a posição anatômica do tumor tem alguma influencia no tempo até o evento de interesse. Observa-se que as curvas apresentam padrões distintos entre os grupos: os pacientes com tumores localizados apenas na **mama direita** apresentam uma sobrevida em queda mais elevada ao longo do tempo, sugerindo menor probabilidade de permanecerem sem o evento em comparação aos demais que possuem cancer em outra posição anatômica. Em contraste, os pacientes com tumores apenas na **mama direita** apresentam uma curva que se mantém mais acentuada da curva, indicando que a ocorrência do evento foi relativamente menos frequente em comparação com casos em que a locação não apenas a esquerda. Já os casos classificados como **bilaterais onde o tumor se concentra nas duas mamas,** possui um declinio maior no grupo que possui essa enfermidade e o maior tempo considerado foi de pouco mais de 6 anos, já no grupo comparado, pela maioria dos casos serem de mulheres que apresentaram tumor apenas em um dos seio notamos que a curva teve um declinio mais suave ao longo do tempo. Na comparação estatística entre as curvas, por meio do teste de log-rank, verificou-se que as diferenças não foram estatisticamente significativas. Contudo, foi relevante analisar o comportamento das censuras, observando-se uma notável incidência de casos nos menores tempos e as diferenças nos tempos medianos assim como o tempo máximo observado de cada umas das estratificações.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(survival)
+library(survminer)
+library(plotly)
+library(htmltools)
+library(grid)
+
+# ---- Função auxiliar para criar gráfico com tema ajustado ----
+faz_grafico <- function(fit, labs) {
+  g <- ggsurvplot(
+    fit,
+    palette   = color,
+    pval      = TRUE,
+    conf.int  = TRUE,
+    conf.int.alpha = 0.15,
+    censor    = TRUE,
+    ggtheme   = theme_bw(),
+    legend.title = "Seções:",
+    legend.labs  = labs,
+    xlab = "Tempo (em anos)",
+    ylab = "Probabilidade"
+  )
+  
+  g$plot <- g$plot + 
+    theme(
+      axis.text.x  = element_text(size = 16),
+      axis.text.y  = element_text(size = 16),
+      axis.title.x = element_text(size = 16),
+      axis.title.y = element_text(size = 16),
+      legend.title = element_text(size = 16),
+      legend.text  = element_text(size = 16),
+      legend.key.size   = unit(0.3, "cm"),
+      legend.spacing.y  = unit(0.1, "cm"),
+      legend.background = element_rect(fill = "white", colour = "black"),
+      legend.position   = "top"
+    )
+  g
+}
+
+# ---- Ajustes dos modelos ----
+fit5 <- survfit(Surv(TempoCombinado/365, status) ~ terapia_adjuvante,
+                data = dados_tratemnto_simples, conf.type = "log-log")
+
+fit6 <- survfit(Surv(TempoCombinado/365, status) ~ terapia_adjuvante,
+                data = dados_tratemnto_duplo, conf.type = "log-log")
+
+fit7 <- survfit(Surv(TempoCombinado/365, status) ~ terapia_adjuvante,
+                data = dados_tratemnto_triplo, conf.type = "log-log")
+
+fit8 <- survfit(Surv(TempoCombinado/365, status) ~ terapia_adjuvante_fator,
+                data = dados, conf.type = "log-log")
+
+# ---- Criação dos gráficos ----
+fit5_grafico <- faz_grafico(fit5, c("Hormônio", "Quimio", "Radio"))
+fit6_grafico <- faz_grafico(fit6, c("Radio + Quimio", "Quimio + Hormônio", "Radio + Hormônio"))
+fit7_grafico <- faz_grafico(fit7, c("Quimio + Radio + Hormônio", "Radio + Quimio + Hormônio"))
+fit8_grafico <- faz_grafico(fit8, c("Simples", "Dupla", "Tripla"))
+
+# ---- Função para ajustar legenda no plotly ----
+ajusta_legenda_plotly <- function(p) {
+  ggplotly(p$plot) %>%
+    layout(
+      legend = list(
+        orientation = "h",
+        x = 0.5, xanchor = "center",
+        y = 1.15,                 # posição acima do gráfico
+        font = list(size = 11)    # tamanho do texto
+      )
+    )
+}
+
+p5 <- ajusta_legenda_plotly(fit5_grafico)
+p6 <- ajusta_legenda_plotly(fit6_grafico)
+p7 <- ajusta_legenda_plotly(fit7_grafico)
+p8 <- ajusta_legenda_plotly(fit8_grafico)
+
+# ---- Layout final lado a lado ----
+browsable(
+  tagList(
+    tags$div(
+      style = "
+        display: flex; 
+        flex-wrap: wrap; 
+        gap: 16px; 
+        justify-content: center;
+      ",
+      tags$div(style = "flex: 1 1 45%; min-width: 280px;", p5),
+      tags$div(style = "flex: 1 1 45%; min-width: 280px;", p6),
+      tags$div(style = "flex: 1 1 45%; min-width: 280px;", p7),
+      tags$div(style = "flex: 1 1 45%; min-width: 280px;", p8)
+    )
+  )
+)
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+#(teste de logrank) -------------------------------------------------------------------------
+# Função para extrair resumo compacto
+# extrair_resumo_compacto <- function(formula, data, nome_variavel, grupo1, grupo2) {
+#   res <- survdiff(formula, data = data)
+#   p <- 1 - pchisq(res$chisq, df = length(res$n) - 1)
+#   p_formatado <- ifelse(p < 0.001, "<0.001", formatC(p, digits = 3, format = "f"))
+#   
+#   data.frame(
+#     Variável = nome_variavel,
+#     `Grupo 1` = grupo1,
+#     `Grupo 2` = grupo2,
+#     `χ²` = round(res$chisq, 1),
+#     gl = length(res$n) - 1,
+#     `p-valor` = p_formatado,
+#     check.names = FALSE,
+#     stringsAsFactors = FALSE
+#   )
+# }
+# 
+# # Montar a tabela final com descrições mais claras
+# extrair_resumo_compacto <- function(formula, data, nome_variavel, grupo1, grupo2) {
+#   res <- survdiff(formula, data = data)
+#   p <- 1 - pchisq(res$chisq, df = length(res$n) - 1)
+#   p_formatado <- ifelse(p < 0.001, "<0.001", formatC(p, digits = 3, format = "f"))
+#   
+#   data.frame(
+#     Variável = nome_variavel,
+#     `Grupo 1` = grupo1,
+#     `Grupo 2` = grupo2,
+#     `χ²` = round(res$chisq, 1),
+#     gl = length(res$n) - 1,
+#     `p-valor` = p_formatado,
+#     check.names = FALSE,
+#     stringsAsFactors = FALSE
+#   )
+# }
+# 
+# # Montar a tabela final com descrições mais claras
+# tabela_resumo <- bind_rows(
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_hormonio_fator1,
+#     data = dados,  # Added explicit parameter name
+#     nome_variavel = "Nº de hormonioterapia",
+#     grupo1 = "Abaixo de 12 seções",
+#     grupo2 = "Acima de 12 seções"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ terapia_adjuvante_fator,
+#     data = dados,
+#     nome_variavel = "Nível de terapia Adjuvante",
+#     grupo1 = "Simples",
+#     grupo2 = "Dupla e Tripla"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ idade_fator1,
+#     data = dados,
+#     nome_variavel = "Idade",
+#     grupo1 = "Abaixo de 35 anos",
+#     grupo2 = "Acima de 35 anos"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_quimio_fator1,
+#     data = dados,
+#     nome_variavel = "Nº de quimioterapia",
+#     grupo1 = "Abaixo de 15 seções",
+#     grupo2 = "Acima de 15 seções"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_radio_fator1,
+#     data = dados,
+#     nome_variavel = "Nº de radioterapia",
+#     grupo1 = "Abaixo de 15 seções",
+#     grupo2 = "Acima de 15 seções"
+#   )
+# )
+# 
+# # Exibir com kable
+# tabela_resumo %>%
+#   kable(
+#     caption = "Resumo dos testes log-rank por variável",
+#     align = c("l", "l", "l", "c", "c", "r")  # Adjusted alignment
+#   ) %>%
+#   kable_styling(
+#     full_width = FALSE,
+#     font_size = 14,  # Reduced from 18 for better fit
+#     bootstrap_options = c("striped", "hover", "condensed")
+#   )
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+# teste PetoPeto ----------------------------------------------------------
+# Montar a tabela final
+# tabela_resumo2 <- bind_rows(
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_hormonio_fator1, 
+#     data = dados,
+#     nome_variavel = "Nº de hormonioterapia",
+#     grupo1 = "≤12 sessões",
+#     grupo2 = ">12 sessões"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ idade_fator1, 
+#     data = dados,
+#     nome_variavel = "Idade",
+#     grupo1 = "<35 anos",
+#     grupo2 = "≥35 anos"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ terapia_adjuvante_fator, 
+#     data = dados,
+#     nome_variavel = "Terapia adjuvante",
+#     grupo1 = "Simples",
+#     grupo2 = "Dupla/Tripla"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_quimio_fator1, 
+#     data = dados,
+#     nome_variavel = "Nº de quimioterapias",
+#     grupo1 = "≤15 sessões",
+#     grupo2 = ">15 sessões"
+#   ),
+#   extrair_resumo_compacto(
+#     Surv(TempoCombinado/365, status) ~ n_de_radio_fator1, 
+#     data = dados,
+#     nome_variavel = "Nº de radioterapias",
+#     grupo1 = "≤15 sessões",
+#     grupo2 = ">15 sessões"
+#   )
+# )
+# 
+# # Exibir tabela formatada
+# tabela_resumo2 %>%
+#   kable(
+#     caption = "Análise de sobrevivência (teste log-rank)",
+#     align = c("l", "l", "l", "c", "c", "r"),
+#     col.names = c("Variável", "Grupo 1", "Grupo 2", "χ²", "gl", "p-valor")
+#   ) %>%
+#   kable_styling(
+#     full_width = FALSE,
+#     font_size = 14,
+#     bootstrap_options = c("striped", "hover", "condensed"),
+#     position = "center"
+#   ) %>%
+#   footnote(
+#     general = "Análise realizada utilizando o teste log-rank de comparação de curvas de sobrevivência",
+#     general_title = "Nota:",
+#     footnote_as_chunk = TRUE
+#   )
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+# Escolha do modelo mais adequado -----------------------------------------
+
+# encontrar_melhores_cortes <- function(dados, alpha = 0.05, min_obs = 5, top_n = 5) {
+#   require(flexsurv)
+#   require(lmtest)
+#   require(dplyr)
+#   
+#   # Inicializar lista para armazenar resultados
+#   todos_resultados <- list()
+#   
+#   # 1. Análise para 2 grupos (binário) ----------------------------------------
+#   cat("\nAnalisando divisões em 2 grupos...\n")
+#   resultados_2g <- data.frame()
+#   
+#   # Testar todos os possíveis cortes binários
+#   valores_unicos <- sort(unique(dados$n_de_quimio))
+#   valores_unicos <- valores_unicos[-length(valores_unicos)] # remove o maior valor
+#   
+#   for (corte in valores_unicos) {
+#     dados$grupo <- factor(ifelse(dados$n_de_quimio <= corte, paste0("≤", corte), paste0(">", corte)))
+#     
+#     tab <- table(dados$grupo)
+#     if (all(tab >= min_obs)) {
+#       tryCatch({
+#         mod <- flexsurvreg(Surv(TempoCombinado, status) ~ grupo, data = dados, dist = "gengamma")
+#         mod_nulo <- flexsurvreg(Surv(TempoCombinado, status) ~ 1, data = dados, dist = "gengamma")
+#         teste <- lrtest(mod_nulo, mod)
+#         
+#         resultados_2g <- rbind(resultados_2g, data.frame(
+#           Tipo = "2 grupos",
+#           Corte = paste("≤", corte, "vs >", corte),
+#           P_valor = teste$"Pr(>Chisq)"[2],
+#           N_menor = min(tab),
+#           N_maior = max(tab)
+#         ))
+#       }, error = function(e) NULL)
+#     }
+#   }
+#   
+#   # Ordenar e pegar os top_n mais significativos
+#   if (nrow(resultados_2g) > 0) {
+#     resultados_2g <- resultados_2g %>% 
+#       arrange(P_valor) %>% 
+#       head(top_n)
+#     todos_resultados[["2_grupos"]] <- resultados_2g
+#   }
+#   
+#   # 2. Análise para 3 grupos (tercis) -----------------------------------------
+#   cat("\nAnalisando divisões em 3 grupos...\n")
+#   resultados_3g <- data.frame()
+#   
+#   # Gerar possíveis combinações de 2 cortes
+#   cortes_possiveis <- quantile(dados$n_de_quimio, probs = c(1/3, 2/3)) %>% round()
+#   
+#   for (corte1 in seq(max(1, cortes_possiveis[1]-2), min(cortes_possiveis[1]+2, cortes_possiveis[2]-1))) {
+#     for (corte2 in seq(max(corte1+1, cortes_possiveis[2]-2), min(cortes_possiveis[2]+2, max(valores_unicos)))) {
+#       dados$grupo <- cut(dados$n_de_quimio, 
+#                          breaks = c(-Inf, corte1, corte2, Inf),
+#                          labels = c(paste0("≤", corte1), 
+#                                     paste0(corte1+1, "-", corte2), 
+#                                     paste0(">", corte2)))
+#       
+#       tab <- table(dados$grupo)
+#       if (all(tab >= min_obs)) {
+#         tryCatch({
+#           mod <- flexsurvreg(Surv(TempoCombinado, status) ~ grupo, data = dados, dist = "gengamma")
+#           mod_nulo <- flexsurvreg(Surv(TempoCombinado, status) ~ 1, data = dados, dist = "gengamma")
+#           teste <- lrtest(mod_nulo, mod)
+#           
+#           resultados_3g <- rbind(resultados_3g, data.frame(
+#             Tipo = "3 grupos",
+#             Corte = paste(c("≤", corte1, "|", corte1+1, "-", corte2, "| >", corte2), collapse = ""),
+#             P_valor = teste$"Pr(>Chisq)"[2],
+#             N_min = min(tab),
+#             N_med = median(tab),
+#             N_max = max(tab)
+#           ))
+#         }, error = function(e) NULL)
+#       }
+#     }
+#   }
+#   
+#   # Ordenar e pegar os top_n mais significativos
+#   if (nrow(resultados_3g) > 0) {
+#     resultados_3g <- resultados_3g %>% 
+#       arrange(P_valor) %>% 
+#       head(top_n)
+#     todos_resultados[["3_grupos"]] <- resultados_3g
+#   }
+#   
+#   # 3. Análise para 4 grupos (quartis) ----------------------------------------
+#   cat("\nAnalisando divisões em 4 grupos...\n")
+#   resultados_4g <- data.frame()
+#   
+#   # Gerar possíveis combinações de 3 cortes baseados em quartis
+#   quartis <- quantile(dados$n_de_quimio, probs = c(0.25, 0.5, 0.75)) %>% round()
+#   
+#   # Testar variações próximas aos quartis
+#   for (corte1 in seq(max(1, quartis[1]-2), quartis[1]+2)) {
+#     for (corte2 in seq(max(corte1+1, quartis[2]-2), quartis[2]+2)) {
+#       for (corte3 in seq(max(corte2+1, quartis[3]-2), min(quartis[3]+2, max(valores_unicos)))) {
+#         dados$grupo <- cut(dados$n_de_quimio, 
+#                            breaks = c(-Inf, corte1, corte2, corte3, Inf),
+#                            labels = c(paste0("≤", corte1), 
+#                                       paste0(corte1+1, "-", corte2),
+#                                       paste0(corte2+1, "-", corte3),
+#                                       paste0(">", corte3)))
+#         
+#         tab <- table(dados$grupo)
+#         if (all(tab >= min_obs)) {
+#           tryCatch({
+#             mod <- flexsurvreg(Surv(TempoCombinado, status) ~ grupo, data = dados, dist = "gengamma")
+#             mod_nulo <- flexsurvreg(Surv(TempoCombinado, status) ~ 1, data = dados, dist = "gengamma")
+#             teste <- lrtest(mod_nulo, mod)
+#             
+#             resultados_4g <- rbind(resultados_4g, data.frame(
+#               Tipo = "4 grupos",
+#               Corte = paste(c("≤", corte1, "|", corte1+1, "-", corte2, "|", 
+#                               corte2+1, "-", corte3, "| >", corte3), collapse = ""),
+#               P_valor = teste$"Pr(>Chisq)"[2],
+#               N1 = tab[1],
+#               N2 = tab[2],
+#               N3 = tab[3],
+#               N4 = tab[4]
+#             ))
+#           }, error = function(e) NULL)
+#         }
+#       }
+#     }
+#   }
+#   
+#   # Ordenar e pegar os top_n mais significativos
+#   if (nrow(resultados_4g) > 0) {
+#     resultados_4g <- resultados_4g %>% 
+#       arrange(P_valor) %>% 
+#       head(top_n)
+#     todos_resultados[["4_grupos"]] <- resultados_4g
+#   }
+#   
+#   # Retornar os melhores resultados de cada categoria
+#   return(todos_resultados)
+# }
+#checar_significancia_modelo(dados, "idade")
+#checar_significancia_modelo(dados, "n_de_radio")
+#checar_significancia_modelo(dados, "n_de_hormonio")
+#checar_significancia_modelo(dados, "n_de_quimio")
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#requir
+# (Passo 1) estrategia de seleção de variáveis, ajustando modelos com uma covariável ------------------------
+
+# Ajustar o modelo Exponêncial
+# modelo_exponencial <- survreg(
+#   Surv(TempoCombinado, status) ~ idade + terapia_adjuvante_fator + n_de_radio +
+#     n_de_quimio + n_de_hormonio + receptor_progesterona,
+#   dist = "exponential"
+# ); anova(modelo_exponencial); summary(modelo_exponencial)
+
+# mod1 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ idade_log,
+#   dist = "gengamma"); lrtest(mod1) #foi significativo
+# #mod2 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ terapia_adjuvante_fator,
+#   dist = "gengamma"); lrtest(mod2) #foi significativo, porém pela variável 
+#ser muito correlacionada acaba por ser deixada de lado
+# mod3 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ n_de_radio_log,
+#   dist = "gengamma"); lrtest(mod3) # não foi significativo
+# mod4 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ n_de_quimio_log,
+#   dist = "gengamma"); lrtest(mod4) #foi significativo
+# mod5 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ n_de_hormonio_log,
+#   dist = "gengamma"); lrtest(mod5) #foi significativo
+# mod6 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ local_E,
+#   dist = "gengamma"); lrtest(mod6) #não foi significativo
+# mod7 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ local_D,
+#   dist = "gengamma"); lrtest(mod6) #não foi significativo
+# mod8 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ local_E_D,
+#   dist = "gengamma"); lrtest(mod6) #não foi significativo
+# mod9 <- flexsurvreg(
+#   Surv(TempoCombinado, status) ~ local_fator,
+#   dist = "gengamma"); lrtest(mod6) #não foi significativo
+
+
+#ajustando conjuntamnete todas as variáveis significativas no Passo 1
+
+# mod10 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log + 
+#     n_de_quimio_log +
+#     n_de_hormonio_log,
+#   dist = "gengamma"); lrtest(mod10);
+
+
+# (Passo 2) ajustando conjuntamente as variáveis significativas no passo 1 -------------------------------------
+#removendo variáveis que não contribuiem para o efeito de variação em Y e testando conjuntamente as demais
+
+# mod11 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     #idade_log+ 
+#     n_de_quimio_log + 
+#     n_de_hormonio_log,
+#   dist = "gengamma"); lrtest(mod11, mod10)
+# #retirada de idade_fator não foi signtificativa
+# 
+# mod12 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     idade_log + 
+#     n_de_hormonio_log
+#     # n_de_quimio_log
+# ,dist = "gengamma"); lrtest(mod12, mod10); 
+# #a retirada n_de_quimio_log não foi signtificativa
+# 
+# mod13 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     idade_log +
+#     #n_de_hormonio_log
+#      n_de_quimio_log
+# ,dist = "gengamma"); lrtest(mod13, mod10); 
+# #a retirada n_de_hormonio_log foi signtificativa
+# 
+# 
+# mod14 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     n_de_hormonio_log
+# ,dist = "gengamma"); lrtest(mod14); 
+# #a retirada n_de_hormonio_log foi signtificativa
+# 
+# 
+# 
+# # (Passo 3) ajustando conjuntamente as variáveis retiradas e estatiscamente significativas no passo 2 ----------
+# #colocando novamente as variáveis excluídas no passo 2 anterior para confirmar que elas não são significativas
+# 
+# 
+# #como quase todas as variáveis do passo 2 foram significativas, logo proseguimos para próximo passo sem considerar idade_log.
+# mod15 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     idade_log + 
+#     n_de_hormonio_log ,
+#   dist = "gengamma"); lrtest(mod15, mod14);
+# 
+# mod16 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     n_de_quimio_log + 
+#     n_de_hormonio_log ,
+#   dist = "gengamma"); lrtest(mod16, mod14);
+# 
+# 
+# # (Passo 4) reintroduizando as variáveis que são significativas no Passo 3 e excluidas no Passo 1 --------
+# mod16 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     n_de_radio_log ,
+#   dist = "gengamma"); lrtest(mod16, mod10); 
+# #a reintrodução da variável n_de_radio_log  foi signficativa
+# 
+# mod17 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     local_D ,
+#   dist = "gengamma"); lrtest(mod17, mod10); 
+# #a reintrodução da variável local_D não foi signficativa
+# 
+# mod18 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     local_E,
+#   dist = "gengamma"); lrtest(mod18, mod10); 
+# #a reintrodução da variável local_E não foi signficativa
+# 
+# mod19 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     local_E_D,
+#   dist = "gengamma"); lrtest(mod19, mod10); 
+# #a reintrodução da variável  local_E_D não foi signficativa
+# 
+# 
+# mod20 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     local_fator,
+#   dist = "gengamma"); lrtest(mod20, mod10); 
+# #a reintrodução da variável local_fator não foi signficativa
+# 
+# mod21 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log +
+#     n_de_hormonio_log + 
+#     n_de_quimio_log +
+#     n_de_radio_log,
+#   dist = "gengamma"); lrtest(mod21); 
+# 
+# #a reintrodução da variávieis excluídas no passo 1 apenas n_de_radio_log foi significativa
+# 
+# # (passo 5) testar se a retirada de variáveis e significativa--------
+# 
+# 
+# mod22 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     #idade_log + 
+#     n_de_quimio_log +
+#     n_de_hormonio_log +
+#     n_de_radio_log,
+#     dist = "gengamma"); lrtest(mod22, mod21);
+# 
+# mod23 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log + 
+#    # n_de_quimio_log +
+#     n_de_hormonio_log +
+#     n_de_radio_log,
+#     dist = "gengamma"); lrtest(mod23, mod21);
+# 
+# mod24= flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log + 
+#     n_de_quimio_log +
+#     #n_de_hormonio_log 
+#     n_de_radio_log,
+#     dist = "gengamma"); lrtest(mod24, mod21);
+# 
+# mod25 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log + 
+#     n_de_quimio_log +
+#     n_de_hormonio_log ,
+#    # n_de_radio_log,
+#     dist = "gengamma"); lrtest(mod25, mod21);
+# 
+# #ao testar a retirada de cada uma percebemos que apenas n_de_quimio_log não signficativa nesse passo
+# mod26 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~ 
+#     idade_log + 
+#     n_de_radio_log +
+#     n_de_hormonio_log,
+#     dist = "gengamma"); lrtest(mod26);
+# 
+# 
+# 
+# # (Passo 6) testando se as interações entre as variáveis são significativas --------
+# mod27 = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     idade_log +
+#     n_de_hormonio_log +
+#     n_de_radio_log +
+#   n_de_hormonio_log *  n_de_radio_log,
+#   dist = "gengamma"); lrtest(mod27, mod26);
+# 
+# #idade_log * n_de_radio_log: p-valor = 0.4155
+# #idade_log * n_de_hormonio_log: p-valor = 0.06497
+# #n_de_hormonio_log *  n_de_radio_log: p-valor =  0.009217 **
+# 
+# 
+# # (Passo 7) escolha das variáveis que serão inclusas ----------------------
+# modelo_variaveis_final = flexsurvreg(
+#   Surv(TempoCombinado, status) ~
+#     idade_log +
+#     n_de_hormonio_log +
+#     n_de_radio_log +
+#     n_de_hormonio_log *  n_de_radio_log
+#   ,dist = "gengamma"); lrtest(modelo_variaveis_final);
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# selecionado o melhor modelo paramétrico -----------------------------------
+ # Ajuste do modelo exponencial
+ modelo_gamma_nulo = flexsurvreg(
+   Surv(dados$TempoCombinado,dados$status) ~ 1,
+   dist = "gamma");  
+
+
+ # Ajuste do modelo exponencial
+ modelo_exponencial_nulo = survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ 1,
+   dist = "exp"); 
+ 
+ 
+ # Ajustar o modelo Weibull
+ modelo_weibull_nulo <- survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ 1, 
+   dist = "weibull"
+ ) ; 
+ 
+  modelo_lognormal_nulo <- survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ 1,
+   dist = "lognormal"
+ ) ; 
+ 
+
+alpha_exp = exp(modelo_exponencial_nulo$coefficients[1]);
+alpha_weib = exp(modelo_weibull_nulo$coefficients[1]);
+gama_weib <- 1/modelo_weibull_nulo$scale;
+mi = modelo_lognormal_nulo$coefficients[1]; sigma = modelo_lognormal_nulo$scale; cbind(mi,sigma)
+
+
+fit0 <- survfit(Surv(time = TempoCombinado, event = status) ~ 1, data = dados);
+time <- fit0$time;
+st_kamplermier <- fit0$surv;
+st_exponencial <- exp(-time/alpha_exp);
+st_weibull <- exp(-(time/alpha_weib)^gama_weib);
+st_lognormal <- pnorm(-(log(time) - mi) / sigma);
+st_modelos = cbind(time,
+                   st_kamplermier,
+                   st_exponencial,
+                   st_weibull,
+                   st_lognormal
+) %>% as.data.frame();
+
+
+# verificando qual modelo é mais adequado via método gráfico 1-------------
+graf1 = ggplot(data = data.frame(st_modelos), aes(x = st_exponencial, y = st_kamplermier)) +
+  ylab("S(t) estimada via modelo exponencial") + xlab("S(t) estimada via modelo de Kaplan–Meier") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1)+
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  );
+graf2 = ggplot(data = data.frame(st_modelos), aes(x = st_weibull, y = st_kamplermier)) +
+  ylab("S(t) estimada via modelo weibull") + xlab("S(t) estimada via modelo de Kaplan–Meier") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1)+
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  );
+graf3 = ggplot(data = data.frame(st_modelos), aes(x = st_lognormal, y = st_kamplermier)) +
+  ylab("S(t) estimada via modelo lognormal") + xlab("S(t) estimada via modelo de Kaplan–Meier") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1)+
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  );
+
+gridExtra::grid.arrange(graf1,graf2,graf3, ncol =3, nrow =1)
+
+# verificando qual modelo é mais adequado via método gráfico 2-------------
+
+# Gráfico 4
+graf4 <- ggplot(data = data.frame(st_modelos), aes(x = time, y = -log(st_kamplermier))) +
+  ylab(expression(-log(S(t)))) +
+  xlab("t") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1) +
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  )
+
+# Gráfico 5
+graf5 <- ggplot(data = data.frame(st_modelos), aes(x = time, y = log(-log(st_kamplermier)))) +
+  ylab(expression(log(-log(S(t))))) +
+  xlab("log(t)") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1) +
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  )
+
+# Gráfico 6
+graf6 <- ggplot(data = data.frame(st_modelos), aes(x = time, y = qnorm(st_kamplermier))) +
+  ylab(expression(Phi^-1(S(t)))) +
+  xlab("log(t)") +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1) +
+  theme(
+    axis.text.x = element_text(hjust = 1, size = 12),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_text(size = 12)
+  )
+
+# Organizar gráficos lado a lado
+gridExtra::grid.arrange(graf4, graf5, graf6, ncol = 3, nrow = 1)
+```
+
+## **Teste de razão de verossimilhança**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# Supondo que os modelos já estão ajustados:
+# modelo_gamma, modelo_exponencial, modelo_weibull, modelo_lognormal
+# teste de razão de verossimilhança; ------------------------------------- # 
+# Executar os testes de razão de verossimilhança
+resultado_teste1 <- lrtest(modelo_gamma_nulo, modelo_exponencial_nulo)
+resultado_teste2 <- lrtest(modelo_gamma_nulo, modelo_weibull_nulo)
+resultado_teste3 <- lrtest(modelo_gamma_nulo, modelo_lognormal_nulo)
+
+# Preparar os resultados em um data frame
+tabela_lr <- bind_rows(
+  data.frame(
+    Comparação = "Gamma vs Exponencial",
+    `Df Diferença` = resultado_teste1$Df[2],
+    `Chisq` = round(resultado_teste1$Chisq[2], 3),
+    `Valor-p` = resultado_teste1$`Pr(>Chisq)`[2],
+    Resultado = ifelse(resultado_teste1$`Pr(>Chisq)`[2] < 0.05, "Rejeita H0", "Não rejeita H0")
+  ),
+  data.frame(
+    Comparação = "Gamma vs Weibull",
+    `Df Diferença` = resultado_teste2$Df[2],
+    `Chisq` = round(resultado_teste2$Chisq[2], 3),
+    `Valor-p` = resultado_teste2$`Pr(>Chisq)`[2],
+    Resultado = ifelse(resultado_teste2$`Pr(>Chisq)`[2] < 0.05, "Rejeita H0", "Não rejeita H0")
+  ),
+  data.frame(
+    Comparação = "Gamma vs Lognormal",
+    `Df Diferença` = resultado_teste3$Df[2],
+    `Chisq` = round(resultado_teste3$Chisq[2], 3),
+    `Valor-p` = resultado_teste3$`Pr(>Chisq)`[2],
+    Resultado = ifelse(resultado_teste3$`Pr(>Chisq)`[2] < 0.05, "Rejeita H0", "Não rejeita H0")
+  )
+)
+
+# Criar tabela HTML estilizada
+tabela_lr %>%
+  kable(
+    caption = "Teste de Razão de Verossimilhança entre Modelos",
+    align = c("l", "c", "c", "c", "c"),
+    format = "html",
+    escape = FALSE
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 16
+  ) %>%
+  row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "5cm") %>%
+  column_spec(5, bold = TRUE, color = "white", background = ifelse(tabela_lr$Resultado == "Rejeita H0", "#e74c3c", "#2ecc71")) 
+
+```
+
+## **Ajustando o modelo completo**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+
+ # Ajuste do modelo exponencial
+ modelo_exponencial = survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ dados$idade_fator1 + dados$n_de_hormonio_fator1 + dados$n_de_radio_fator1 + 
+        dados$n_de_quimio_fator1 + dados$n_de_hormonio_fator1 * 
+        dados$n_de_radio_fator1, dist = "exp") 
+ 
+ # Ajustar o modelo Weibull
+ modelo_weibull <- survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ dados$idade_fator1 + dados$n_de_hormonio_fator1 + dados$n_de_radio_fator1 + 
+        dados$n_de_quimio_fator1 + dados$n_de_hormonio_fator1 * 
+        dados$n_de_radio_fator1,  dist = "weibull") 
+  # Ajustar o modelo lognromal
+  modelo_lognormal <- survreg(
+   Surv(dados$TempoCombinado,dados$status) ~ dados$idade_fator1 + dados$n_de_hormonio_fator1 + dados$n_de_radio_fator1 + 
+        dados$n_de_quimio_fator1 + dados$n_de_hormonio_fator1 * 
+        dados$n_de_radio_fator1, dist = "lognormal")
+```
+
+## **Critério AIC e BIC para Seleção de modelos completos**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# Calcular AIC e BIC para cada modelo
+tabela_ic <- data.frame(
+  Modelo = c("Exponencial", "Weibull", "Lognormal"),
+  AIC = c(AIC(modelo_exponencial), AIC(modelo_weibull), AIC(modelo_lognormal)),
+  BIC = c(BIC(modelo_exponencial), BIC(modelo_weibull), BIC(modelo_lognormal))
+)
+
+# Criar tabela HTML estilizada
+tabela_ic %>%
+  kable(
+    caption = "Comparação de Modelos pelo Critério AIC e BIC",
+    align = c("l", "c", "c"),
+    format = "html",
+    digits = 2
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 16
+  ) %>%
+  row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "5cm") %>%
+  column_spec(2:3, bold = TRUE, color = "black",
+              background = sapply(1:nrow(tabela_ic), function(i){
+                if(i == which.min(tabela_ic$AIC) & i == which.min(tabela_ic$BIC)) {
+                  "#3498db"  # azul se é mínimo AIC e BIC
+                } else if(i == which.min(tabela_ic$AIC)) {
+                  "#2ecc71"  # verde se mínimo AIC
+                } else if(i == which.min(tabela_ic$BIC)) {
+                  "#f1c40f"  # amarelo se mínimo BIC
+                } else {
+                  "#ecf0f1"  # cinza claro caso contrário
+                }
+              }))
+ 
+```
+
+## **Verificando ajuste do modelo, possíveis influências**
+
+```{r, echo = F, warning= F, fig.height=12, fig.width= 12}
+library(ggplot2)
+library(gridExtra)
+
+# Vetores de resíduos
+res_ldcase  <- residuals(modelo_lognormal, type = "ldcase")
+res_ldresp  <- residuals(modelo_lognormal, type = "ldresp")
+res_ldshape <- residuals(modelo_lognormal, type = "ldshape")
+
+# IDs que você quer destacar em vermelho
+#ids_destaque <- c(5, 128, 143, 132, 57, 142)
+ids_destaque <- c(5, 128, 143, 132, 57)
+
+# Tema padronizado
+tema <- theme_bw() +
+  theme(
+    text = element_text(size = 16),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+  legend.position = "none"
+  )
+
+# Função genérica para criar gráfico de resíduos com destaque por ID
+plot_residuos <- function(res, titulo, ids_destaque) {
+  df <- data.frame(
+    id = seq_along(res),
+    residual = res,
+    destaque = seq_along(res) %in% ids_destaque
+  )
+  
+  ggplot(df, aes(x = id, y = residual)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    geom_point(aes(color = destaque)) +
+    scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+    geom_text(aes(label = ifelse(destaque, id, id)), vjust = -0.7, size = 4.5) +
+    labs(
+      title = titulo,
+      x = "Índice da Observação",
+      y = "Resíduo"
+    ) +
+    tema
+}
+
+# Criando os gráficos
+g1 <- plot_residuos(res_ldcase, "Vetor de Parâmetros", ids_destaque)
+g2 <- plot_residuos(res_ldresp, "Vetor de Preditos", ids_destaque)
+g3 <- plot_residuos(res_ldshape, "Vetor de Forma", ids_destaque)
+
+# Layout lado a lado
+gridExtra::grid.arrange(g1, g2, g3, ncol = 3)
+
+
+
+```
+
+#### Como teve uma observações influentes, vamos retirar elas e reajustar o modelo e verificar se o ajuste foi melhorado ou não, usando como critério a Loglik(model) do modelo é o critério AIC e BIC.
+
+```{r, echo = F, warning= F, fig.height=12, fig.width= 12}
+#dados1 <- dados[-c(132, 5, 142), ]
+# copia dos dados originais
+# Supondo que você queira substituir valores iguais a algum critério, por exemplo NA
+# ou algum valor específico. Aqui vou mostrar como substituir valores específicos por média
+# substitui os valores em cada coluna pela mediana correspondente
+#dados1  <- dados[-c(5,128,143,132,105,142), ]
+
+dados1 <- dados[-c(5, 128, 143, 132, 57), ]
+modelo_lognormal1 <- survreg(
+   Surv(dados1$TempoCombinado, dados1$status) ~ 
+    dados1$idade_fator1 +
+    dados1$n_de_hormonio_fator1 +
+    dados1$n_de_radio_fator1 +
+    dados1$n_de_quimio_fator1 +
+    dados1$n_de_hormonio_fator1 * dados1$n_de_radio_fator1, 
+     dist = "lognormal"
+ );
+# library(sjPlot)
+# tab_model(modelo_lognormal1,
+#           show.se = TRUE,
+#           show.ci = TRUE,
+#           digits = 3,
+#           title = "Resumo completo do modelo Lognormal");
+# library(modelsummary)
+# 
+# modelsummary(modelo_lognormal1,
+#              output = "markdown",   # funciona em Word/PDF
+#              stars = TRUE,
+#              statistic = c("std.error", "p.value"))
+
+```
+## Verificando se esses valores ajudam ou atrapalham o modelo
+
+```{r,echo = F, warning= F, fig.height=12, fig.width= 12}
+library(knitr)
+library(kableExtra)
+
+# Criando um data frame com as estatísticas dos modelos
+tabela_modelos <- data.frame(
+  Modelo = c("Lognormal", "Lognormal (exclusão das unidades)"),
+  Verossimilhanca = c(logLik(modelo_lognormal), logLik(modelo_lognormal1)),
+  AIC = c(AIC(modelo_lognormal), AIC(modelo_lognormal1)),
+  BIC = c(BIC(modelo_lognormal), BIC(modelo_lognormal1))
+)
+
+# Transformando em tabela com kable
+kable(
+  tabela_modelos,
+  caption = "Comparação de Modelos: Verossimilhança, AIC e BIC",
+  align = c("l", rep("c", ncol(tabela_modelos) - 1)),
+  format = "html",
+  escape = FALSE
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 16
+  ) %>%
+  row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "4cm") %>%
+  add_header_above(
+    c(" " = 1, "Comparação de Estatísticas" = ncol(tabela_modelos) - 1),
+    background = "#34495e", color = "white"
+  )
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# 
+# #----- análise residual do modelo exponencial ----------------------------------------------
+# tempo<-sort(TempoCombinado);  #tempo em dias 200,340,360
+#   
+# x1 = idade_log
+# x2 = n_de_hormonio_log
+# x3 = n_de_radio_log  
+# x4 = n_de_hormonio_log:n_de_radio_log
+# 
+# 
+# b0 = modelo_exponencial$coefficients[1];
+# b1 = modelo_exponencial$coefficients[2];
+# b2 = modelo_exponencial$coefficients[3];
+# b3 = modelo_exponencial$coefficients[4];
+# b4 = modelo_exponencial$coefficients[5];
+# #b5 = modelo_exponencial$coefficients[6];
+# 
+# res1 = tempo*exp(-b0 -b1*x1 -b2*x2-b3*x3-b4*x4) ;
+# ekm1 <- survfit(Surv(time = res1, event = dados$status) ~ 1, type = c("kaplan-meier"));
+# 
+# p1 = ggsurvplot(
+#   ekm1,
+#   data = dados,
+#   conf.int = FALSE,
+#   #conf.int.style = "ribbon",
+#   #conf.int.alpha = 0.1,
+#   #censor.shape = "I",
+#   #censor.size = 4,
+#   #legend.position = "top",
+#   legend = "none",
+#   legend.title = "Ànalise de Resíduos",
+#   #legend.labs = c("Kampler Mier", "Expoencial"),
+#   ggtheme = theme_bw()
+# ) + labs(x = "Resíduos", y = "S(e) estimada")
+# res_ord1 <-sort(res1)
+# exp1<-exp(-(res_ord1))
+# exp_data1 <- data.frame(res_ord1,exp1)
+# g1 <- p1$plot; g1 <- g1 + geom_line(data = exp_data1, aes(x = res_ord1, y = exp1), color = "black")
+# g1 <- g1 + annotate("text", x = 2.5, y = 0.75,
+#                      label = "Exponencial(1)", color = "black", size = 4) +
+#             annotate("text",  x = 2.5, y = 0.65,
+#            label = "Kaplan-Meier", color = "red", size = 4) ;
+# 
+# 
+# s_res_km1 = ekm1$surv; 
+# t1 = ekm1$time; 
+# s_res_exp1 = exp(-t1)
+# st_data = data.frame(s_res_km1,s_res_exp1)
+# 
+# g2 = ggplot(data = data.frame(st_data), aes(x = s_res_km1, y = s_res_exp1)) +
+#   ylab("S(e) exponencial)") + xlab("S(e) Kaplan Meier") +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1)+
+#   theme(
+#     axis.text.x = element_text(hjust = 1, size = 12),
+#     axis.title.y = element_text(size = 12),
+#     axis.title.x = element_text(size = 12)
+#   )+theme_bw();
+# gridExtra::grid.arrange(g1,g2, ncol = 2, nrow = 1)
+
+ 
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# # análise residual do modelo weibull ----------------------------------------------
+# tempo<-sort(TempoCombinado); #temo em dias 200,340,360
+#  
+# x1 = idade
+# x2 = n_de_hormonio
+# x3 = n_de_radio
+# x4 = n_de_hormonio_log:n_de_radio_log 
+# 
+# b0 = modelo_weibull$coefficients[1];
+# b1 = modelo_weibull$coefficients[2];
+# b2 = modelo_weibull$coefficients[3];
+# b3 = modelo_weibull$coefficients[4];
+# b4 = modelo_weibull$coefficients[5];
+# #b5 = modelo_weibull$coefficients[6];
+# 
+# res2 = (tempo*exp(-b0-b1*x1 -b2*x2-b3*x3-b4*x4))^(1/modelo_weibull$scale);
+# ekm2 <- survfit(Surv(time = res2, event = dados$status) ~ 1, type = c("kaplan-meier")); 
+# 
+#  p2 = ggsurvplot(
+#    ekm2,
+#    data = dados,
+#    conf.int = FALSE,
+#    #conf.int.style = "ribbon",
+#    #conf.int.alpha = 0.1,
+#    #censor.shape = "I",
+#    #censor.size = 4,
+#    #legend.position = "top",
+#    legend.title = "Ànalise de Resíduos",
+#    legend = "none",
+#    #legend.labs = c("Kampler Mier", "Expoencial"),
+#    ggtheme = theme_bw()
+#  ) + labs(x = "Resíduos", y = "S(e) estimada")
+#  res_ord2 <-sort(res2)
+#  exp2<-exp(-res_ord2)
+#  exp_data1 <- data.frame(res_ord2,exp2)
+#  g3 <- p2$plot; g3 <- g3 + geom_line(data = exp_data1, aes(x = res_ord2, y = exp2), color = "black")
+#  g3 <- g3 + annotate("text", x = 2.5, y = 0.75,
+#                      label = "Exponencial(1)", color = "black", size = 4) +
+#             annotate("text",  x = 2.5, y = 0.65,
+#            label = "Kaplan-Meier", color = "red", size = 4) ;
+# 
+#  s_res_km2 = ekm2$surv;
+#  t2 = ekm1$time; 
+#  s_res_exp2 = exp(-t2)
+#  st_data2 = data.frame(s_res_km2,s_res_exp2)
+# 
+#  g4 = ggplot(data = data.frame(st_data2), aes(x = s_res_km2, y = s_res_exp2)) +
+#    ylab("S(e) weibull") + xlab("S(e) Kaplan Meier") +
+#    geom_point() +
+#    geom_smooth(method = "lm", se = FALSE, color = "purple", linewidth = 1)+
+#    theme(
+#      axis.text.x = element_text(hjust = 1, size = 12),
+#      axis.title.y = element_text(size = 12),
+#      axis.title.x = element_text(size = 12)
+#    )+theme_bw(); 
+# # Exibir gráficos lado a lado com tamanho padronizado
+# gridExtra::grid.arrange(g3, g4, ncol = 2, widths = c(1, 1), heights = c(1))
+
+
+```
+
+## **Resíduos de cox-snell para o modelo lognormal**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# análise residual do modelo lognormal ----------------------------------------------
+xb <- model.matrix(modelo_lognormal1) %*% coef(modelo_lognormal1)# Preditor linear
+res <- (log(dados1$TempoCombinado) - xb)/modelo_lognormal1$scale # Resíduos padronizados
+ei <- -log(1 - pnorm(res)) # Resíduos de Cox-Snell
+ekm_res <- survfit(Surv(ei, dados1$status) ~ 1) # Curva Kaplan-Meier para resíduos
+qq_data <- data.frame( # Dataframe para o gráfico Q-Q
+  surv_km = ekm_res$surv,
+  surv_exp = exp(-ekm_res$time)
+)
+res_ord <- sort(ei) 
+exp_data <- data.frame( # Dataframe para curva exponencial (usando todos os resíduos ordenados)
+  res_ord = res_ord,
+  exp_curve = exp(-res_ord)
+)
+
+# Gráfico Q-Q Plot
+g_left <- ggplot(qq_data, aes(x = surv_exp, y = surv_km)) +
+  geom_point(color = "black", size = 2) +
+  geom_abline(intercept = 0, slope = 1, color = "blue", linewidth = 1) +
+  labs(x = "Sobrevivência Teórica Exp(1)", 
+       y = expression("S(e) lognormal")) +
+  theme_bw()+
+  tema 
+# Gráfico de Sobrevivência com ggsurvplot
+g_right <- ggsurvplot(
+  survfit(Surv(ei, dados1$status) ~ 1),
+  data = dados1,
+  conf.int = FALSE,
+  ggtheme = theme_bw(),
+  legend = "none"
+)$plot +
+  geom_line(data = exp_data, 
+            aes(x = res_ord, y = exp_curve), 
+            color = "black",
+            linewidth = 1) +
+annotate("text", x = 1.2, y = 0.75,
+                     label = "Exponencial(1)", color = "black", size = 4) +
+            annotate("text",  x = 1.2, y = 0.65,
+           label = "Kaplan-Meier", color = "red", size = 4) +
+  labs(x = "Resíduos de Cox-Snell", 
+       y = "Probabilidade de Sobrevivência") +
+  theme(legend.position = "none") + tema
+
+grid.arrange(
+  g_right, g_left,
+    ncol = 2,
+  widths = c(1, 1)  # largura relativa das colunas
+  #top = "Análise de Resíduos de Cox-Snell para Modelo Lognormal"
+)
+
+```
+
+#### o gráfico de cox snell serve não para dizer qual modelo é melhor ou poior, porém uma ferramenta indispensável para nos dizer se a abordagem é completamente descartável ou podemos proceguir com a intepretação correta das estimativas dos parmêtros. Como podemos visualizar, no modelo lognromal não há afastamento da curva exponencial dos resuídos ordenados versus a cruavd e sovrevivência estimada via Kaplan-Meier dos resíduos, também observamos uma certa tendência linear e positiva na reta na sobrevida estimada para os resuídos vs a sobrevivencia teórica esperada para um modelo expoenecial. Isso indica que o modelo é uma boa escolha para prosseguirmos com as estimativas visto que não demonstra grandes afastamentos, apenas pequenas flutuações que não afteão de forma significativa a reta.
+
+## **Verificando os efeitos para cada variável no modelo**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(dplyr)
+library(broom)
+library(kableExtra)
+
+# Preparar tabela (igual ao seu código)
+coefs <- broom::tidy(modelo_lognormal1, conf.int = TRUE)
+
+tabela <- coefs %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value_text = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3)
+  ) %>%
+  rename(
+    Termo = term,
+    Estimativa = estimate,
+    `Erro Padrão` = std.error,
+    Estatística = statistic,
+    `Valor-p` = p.value_text,
+    `IC Inferior (95%)` = conf.low,
+    `IC Superior (95%)` = conf.high
+  ) %>%
+  mutate(
+    Termo = recode(Termo,
+      "dados1$idade_fator11" = "Faixa Etária \n(≥ 35 anos)",
+      "dados1$n_de_hormonio_fator11" = "Hormonioterapia\n(≥ 10 sessões)",
+      "dados1$n_de_radio_fator11"    = "Radioterapia\n(≥ 15 sessões)",
+      "dados1$n_de_quimio_fator11"   = "Quimioterapia\n(≥ 15 ciclos)",
+      "dados1$n_de_hormonio_fator11:dados1$n_de_radio_fator11" =
+        "Interação: Hormonioterapia \n(≥ 10 sessões) × Radioterapia \n(≥ 15 sessões)",
+      "Log(scale)" = "Log da Escala"
+    )
+  ) %>%
+  mutate(`Valor-p` = cell_spec(`Valor-p`,
+                               color = ifelse(`Valor-p` %in% c("*", "**", "***"), "#e74c3c", "#2c3e50"),
+                               bold = TRUE,
+                               escape = FALSE))
+
+# Criar tabela HTML
+tabela %>%
+  kable(
+    caption = "RESULTADOS DO MODELO LOGNORMAL",
+    align = c("l", "c", "c", "c", "c", "c", "c"),
+    format = "html",
+    escape = FALSE
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 16
+  ) %>%
+  row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "5cm") %>%  # Largura maior
+  add_header_above(
+    c(
+      " " = 1,                        # Termo
+      " " = 1,                        # Estimativa
+      " " = 1,                        # Erro padrão
+      " " = 1,                        # Estatística
+      "Significância" = 1,            # Valor-p
+      "Intervalos de Confiança" = 2,  # IC Inferior + IC Superior
+      "Nível" = 1                     # Log(scale)
+    ),
+    background = "#34495e", color = "white"
+  ) %>%
+  footnote(
+    general = "*** p < 0.001; ** p < 0.01; * p < 0.05; . p < 0.1",
+    general_title = "Níveis de significância:",
+    footnote_as_chunk = TRUE,
+    escape = FALSE
+  )
+
+```
+
+```{r, echo= F,warning= F, fig.height=12, fig.width= 12}
+# library(dplyr)
+# library(ggplot2)
+# library(broom)
+# 
+# # Obter coeficientes
+# df_coef <- tidy(modelo_lognormal1, conf.int = TRUE)
+# 
+# # Limpar nomes
+# df_coef$term <- iconv(df_coef$term, from = "", to = "ASCII//TRANSLIT")
+# df_coef$term <- gsub("`", "", df_coef$term)
+# 
+# # Remover "Log(scale)" do gráfico
+# df_coef <- df_coef %>% filter(term != "Log(scale)")
+# 
+# # Renomear os termos restantes
+# df_coef$term <- recode(df_coef$term,
+#   "dados1$idade_fator11" = "Idade (≥ 35 anos)",
+#   "dados1$n_de_hormonio_fator11" = "Hormonioterapia (≥ 12 sessões)",
+#   "dados1$n_de_radio_fator11"    = "Radioterapia (≥ 18 sessões)",
+#   "dados1$n_de_quimio_fator11"   = "Quimioterapia (≥ 11 ciclos)",
+#   "dados1$n_de_hormonio_fator11:dados1$n_de_radio_fator11" =
+#     "Interação: Hormonioterapia × Radioterapia"
+# )
+# 
+# # Gráfico
+# ggplot(df_coef, aes(x = estimate, y = term)) +
+#   geom_point() +
+#   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+#   geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+#   theme_bw() +
+#   labs(title = "Efeitos do Modelo Lognormal", x = "Estimativa", y = "Variável")
+
+library(sjPlot)
+library(dplyr)
+library(ggplot2)
+
+# dicionário para os nomes bonitos
+labels_vars <- c(
+  "dados1$idade_fator11" = "Faixa Etária (≥ 35 anos)",
+  "dados1$n_de_hormonio_fator11" = "Hormonoterapia (≥ 10 sessões)",
+  "dados1$n_de_radio_fator11"    = "Radioterapia (≥ 15 sessões)",
+  "dados1$n_de_quimio_fator11"   = "Quimioterapia (≥ 15 ciclos)",
+  "dados1$n_de_hormonio_fator11:dados1$n_de_radio_fator11" =
+    "Interação: Hormonoterapia × Radioterapia"
+)
+
+# gráfico do modelo lognormal
+plot_model(
+  modelo_lognormal1,
+  show.values = TRUE,       
+  axis.labels = rev(labels_vars)
+) +
+  tema +
+  labs(
+    title = "Modelo Lognormal (AFT)",
+    x = "Razão de Tempos (exp(β))",
+    y = NULL
+  )
+  #theme_bw() + 
+#  theme(
+ #   panel.background = element_rect(fill = "grey90", colour = NA),
+  #  plot.background  = element_rect(fill = "grey90", colour = NA)
+#    ) 
+
+
+
+```
+
+#### **Nº de Hormonioterapia:** A cada unidade adicional está associada a uma variação muito pequena no tempo até morte por câncer de mama, efeito estatisticamente significativo. **Interpretação:** a quantidade de hormonioterapia recebida pelos pacientes altera substancialmente o tempo até morte.
+
+#### **Nº de Radioterapia:** Também apresenta efeito significativo. **Interpretação:** indica que variações no número de sessões de radioterapia afetam significativamente o tempo até morte.
+
+#### **Idade:** O efeito da idade sobre o tempo até morte é marginal, por mais que não apresente significância estatística com base no teste. No entanto, do ponto de vista clínico, a idade é um fator determinante para o risco, razão pela qual optou-se por manter essa variável no modelo. O câncer de mama é uma das neoplasias malignas mais comuns entre as mulheres, e a idade é reconhecida como um dos principais fatores de risco para o seu desenvolvimento. Segundo o Instituto Nacional de Câncer (INCA), “Mulheres a partir dos 50 anos de idade têm maior risco de desenvolver câncer de mama” \citep{inca2022}. Além disso, estudos epidemiológicos indicam que “o risco de câncer de mama aumenta significativamente após a menopausa” \citep{silva2024}.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# 1. Ajuste do modelo lognormal e obtenção dos coeficientes (beta) e sigma
+coef_log <- coef(modelo_lognormal1)  # Coeficientes (beta)
+sigma_log <- modelo_lognormal$scale # Desvio padrão (sigma)
+
+# 2. Gerar uma sequência de tempos para calcular a sobrevivência
+times_log <- seq(1, max(dados1$TempoCombinado), length.out = 100)
+
+# Função para calcular a função de sobrevivência lognormal
+S_t <- function(t, X, beta, sigma) {
+  mu <- sum(X * beta)  # Calcular mu (valor esperado de log(T)) para cada observação
+  S_t_value <- 1 - pnorm((log(t) - mu) / sigma)  # Aplicar a fórmula de sobrevivência
+  return(S_t_value)
+}
+
+# 3. Criar um vetor para armazenar a sobrevivência média (lognormal)
+surv_mean <- numeric(length(times_log))
+
+# 4. Calcular a sobrevivência média para todos os tempos (lognormal)
+for (t in 1:length(times_log)) {
+  survival_values <- numeric(nrow(dados))
+  
+  # Para cada observação, calcular a sobrevivência no tempo t
+  for (i in 1:nrow(dados1)) {
+    nova_obs <- dados[i, ]
+    X <- model.matrix(~ idade_fator1 + 
+                      n_de_hormonio_fator1 + 
+                      n_de_radio_fator1 + 
+                      n_de_quimio_fator1 +
+                      n_de_hormonio_fator1 * n_de_radio_fator1
+                      , data = nova_obs)
+    survival_values[i] <- S_t(times_log[t], X, coef_log, sigma_log)
+  }
+  
+  # Calcular a sobrevivência média para o tempo t
+  surv_mean[t] <- mean(survival_values)
+}
+
+# 5. Criar um dataframe para a curva lognormal
+surv_data <- data.frame(
+  time = times_log,
+  survival = surv_mean
+)
+
+
+
+```
+
+```{r, echo = F, warning= F, message= F}
+# cox_model <- coxph(Surv(TempoCombinado/365, status) ~
+#       dados1$idade +
+#       dados1$n_de_hormonio +
+#       dados1$n_de_radio +
+#       #dados1$n_de_quimio +
+#       dados1$n_de_hormonio * dados1$n_de_radio, data= dados1)
+#  summary(cox_model) #verificando a signficancia das variáveis para o modelo de cox
+#  residuals(cox_model,type="scaledsch")
+#  plot(survfit(cox_model))
+# # idade_log1:
+# # coef = -1.27 -> HR = 0.28 -> Pacientes com essa faixa etária (mais de 35 anos) 
+# # têm um risco de morte 72% menor do que a faixa etária (menos de 35 anos), 
+# # controlando pelas demais variáveis e estratificando por local.
+# # p = 0.0146 -> Efeito estatisticamente significativo.
+# 
+# # n_de_radio_log1:
+# # coef = -1.34 -> HR = 0.26 -> Pacientes que receberam (abaixo de 18 sessões) tem risco 
+# # 74% menor de morte comparado aos Pacientes que receberam (acima de 18 sessões).
+# # p < 0.001 -> Altamente significativo.
+# 
+# # n_de_quimio_log1:
+# # coef = 0.14 -> HR = 1.13 -> Leve aumento do risco (13%) para os Pascientes que receberam (abaixo de 11 sessões)
+# # quimioterapia em relação aos Pacientes que receberam (acima de 11 sessões) ,  mas p = 0.6497 -> efeito não significativo. Pode ser ruído estatístico.
+# 
+# # n_de_hormonio_log1:
+# # coef = -2.87 -> HR = 0.055 -> Pacientes que fizeram hormonioterapia (Acima de 12 seções)
+# # têm risco 94.45% menor em comparação ao grupo (Abaixo de 12 seções).
+# # p < 0.0001 → Resultado muito significativo.
+# 
+# # local_D1:
+# # coef =-0.09993 -> HR = 0.90 -> Pacientes que tem (Não tem cancer apenas na Mama Direita)
+# # têm risco 10% menor em comparação do grupo que tem (cancer apenas na Mama Direita).
+# # p = 0.899261 → Pouco  significativo.
+# 
+# # local_E1:
+# # coef =-0.43982  -> HR = 0.64-> Pacientes que fizeram hormonioterapia (Não tem cancer apenas na Mama Esquerda)
+# # têm risco 10% menor em comparação ao grupo que tem (cancer apenas na Mama Esquerda).
+# # p = 0.724044 -> Pouco  significativo.
+# 
+# 
+# # Estratificação:
+# # A variável 'local_fator' foi usada como estrato, ou seja, o modelo permite que 
+# # o risco basal (baseline hazard) varie entre os estratos de local_fator, 
+# # sem estimar um coeficiente direto para essa variável.
+# 
+# # Likelihood ratio test = 86.44, gl = 4, p < 2.2e-16:
+# # O modelo como um todo é altamente significativo.
+# # n = 221 (tamanho da amostra), número de eventos = 52 (mortes observadas)
+# 
+# 
+#  RP = cox.zph(cox_model); RP #nenhuma variável e incluisve interações foram violadas, ou seja todas as variáveis são propricionais ao tempo
+# 
+# RP_tabela = RP$table %>% as.data.frame()
+# colnames(RP_tabela) <- c("Qui-quadrado", "GL", "p-valor")
+# kable(RP_tabela, digits = 3, caption = "Teste de Proporcionalidade dos Riscos") %>%
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+#   row_spec(5, bold = TRUE, background = "#f2f2f2")
+
+# ## Plot estilo theme_bw com rótulos do eixo Y personalizados
+# Realiza o teste de proporcionalidade
+# zph <- cox.zph(cox_model, transform = "km")  # ou "log", "rank", etc.
+# 
+# # Constrói o data.frame para plotagem
+# df <- data.frame(
+#   time = zph$time,
+#   variable = rep(colnames(zph$y), each = nrow(zph$y)),
+#   residual = as.vector(zph$y)
+# )
+
+# Gera o gráfico
+# ggplot(df, aes(x = time/365, y = residual,color = "red")) +
+#   geom_point(alpha = 0.5, size = 0.2) +
+#   geom_smooth(method = "loess", se = FALSE, color = "blue") +
+#   facet_wrap(~ variable, scales = "free") +
+#   labs(title = "Resíduos de Schoenfeld",
+#        x = "Tempo em Anos",
+#        y = "Resíduo") +
+#   theme_bw() + tema + theme(legend.position = "none")
+
+
+# #Estimar curvas individuais de sobrevivência pelo modelo de Cox
+# newdata_limpinho <- dados[, all.vars(formula(cox_model))]; newdata_limpinho
+# 
+# #Estimar curvas individuais para cada linha dos dados
+# curvas_individuais <- survfit(cox_model, newdata = newdata_limpinho)
+# 
+# #Kaplan-Meier para comparação
+# fit0 <- survfit(Surv(TempoCombinado/365, status) ~ 1, data = dados)
+# km_data <- data.frame(
+#   time = fit0$time,
+#   survival = fit0$surv,
+#   lower = fit0$lower,
+#   upper = fit0$upper
+# )
+# 
+# # Transforma a matriz de sobrevivência para formato longo
+# matriz_sobrevivencia <- as.data.frame(curvas_individuais$surv)
+# colnames(matriz_sobrevivencia) <- paste0("id_", seq_len(ncol(matriz_sobrevivencia)))
+# matriz_sobrevivencia$time <- curvas_individuais$time
+# 
+# curvas_long <- pivot_longer(matriz_sobrevivencia, 
+#                             cols = starts_with("id_"),
+#                             names_to = "individuo", 
+#                             values_to = "sobrevivencia")
+# 
+# media_sobrevivencia <- curvas_long %>%
+#   group_by(time) %>%
+#   summarise(sobrev_media = mean(sobrevivencia), .groups = "drop")
+# 
+# #Gráfico comparativo
+# ggplot(media_sobrevivencia, aes(x = time, y = sobrev_media)) +
+#   geom_step(color = "blue", linewidth = 1) +  # Curva média do modelo
+#   geom_step(data = km_data, aes(x = time, y = survival), color = "red", linetype = "dashed") +  # Kaplan-Meier
+#   geom_ribbon(data = km_data, aes(x = time, ymin = lower, ymax = upper), 
+#               fill = "gray70", alpha = 0.4, inherit.aes = FALSE) +
+#   annotate("text", x = max(media_sobrevivencia$time) * 0.42, y = 0.75,
+#            label = "Kaplan-Meier", color = "red", size = 4) +
+#   annotate("text", x = max(media_sobrevivencia$time) * 0.12, y = 0.75,
+#            label = "Modelo de Cox", color = "blue", size = 4) +
+#   scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+#   labs(
+#     title = "Curva de Sobrevivência Média vs Kaplan-Meier",
+#     x = "Tempo (Anos)",
+#     y = "Probabilidade de Sobrevivência: S(t)"
+#   ) +
+#   theme_bw(base_size = 14)
+# 
+# #para o risco médio
+# matriz_risco <- as.data.frame(curvas_individuais$cumhaz)
+# colnames(matriz_risco) <- paste0("id_", seq_len(ncol(matriz_risco)))
+# matriz_risco$time <- curvas_individuais$time
+# 
+# risco_long <- pivot_longer(matriz_risco, 
+#                            cols = starts_with("id_"),
+#                            names_to = "individuo", 
+#                            values_to = "risco")
+# 
+# media_risco <- risco_long %>%
+#   group_by(time) %>%
+#   summarise(risco_medio = mean(risco), .groups = "drop")
+# 
+# ggplot(media_risco, aes(x = time, y = risco_medio)) +
+#   geom_step(color = "red", linewidth = 1) +
+#   labs(
+#     title = "Risco Acumulado Médio H(t)",
+#     x = "Tempo",
+#     y = "H(t)"
+#   ) +
+#   theme_bw()
+
+```
+
+```{r, echo = F, warning= F, message= F}
+# # modelo de aalen --------------------------------------------------------
+# km_censura <- survfit(Surv(TempoCombinado/365, status) ~ 1, data = dados)
+# prob_nao_censura <- summary(km_censura, times = dados$TempoCombinado/365)$surv # Obter probabilidades de não-censura no tempo de cada observação
+# dados$ipcw <- 1 / prob_nao_censura # Calcular pesos IPCW (evitando divisão por zero)
+# dados$ipcw[is.infinite(dados$ipcw)] <- max(dados$ipcw[is.finite(dados$ipcw)], na.rm = TRUE) # Substituir infinitos (se houver censura no tempo máximo)
+# aalen_model <- timereg::aalen(Surv(TempoCombinado/365, status) ~
+#                        idade_log +
+#                        n_de_radio_log  +
+#                        n_de_hormonio_log +
+#                        n_de_quimio_log +
+#                        #terapia_adjuvante_fator
+#                        local_D + 
+#                        local_E ,
+#                       # local_E_D 
+#                       data = dados,
+#                       robust = TRUE,
+#                       weights = dados$ipcw  # Usando os pesos calculados
+#                      ) ;aalen_model
+# 
+
+
+
+#1. Teste de Significância dos Termos Não Paramétricos (Supremum-test)
+#Esse teste avalia a significância global da função de coeficiente ao longo do tempo, ou seja, se 
+#B(t)=0 ao longo de todo o tempo (H₀). Valores de p abaixo de 0.05 indicam que o efeito não é nulo
+#ao longo do tempo.
+#2. Teste de Invariância Temporal (H₀: efeito constante no tempo)
+# - Kolmogorov-Smirnov (K-S): Sensível a desvios pontuais.
+# - Cramér-von Mises (CvM): Sensível a desvios globais.
+#Valores de p baixos sugerem violação da hipótese de efeito constante, ou seja, que o efeito varia 
+#ao longo do tempo.
+
+#interpetação:
+#Os efeitos de idade, rádio, hormônio e intercepto claramente variam ao longo do tempo.
+#O efeito de quimioterapia é limítrofe, talvez aproximadamente constante.
+#Os efeitos dos locais (D1 e E1) podem ser considerados constantes ao longo do tempo.
+# Extrai o hazard cumulativo estimado
+# H <- rowSums(aalen_model$cum)
+# H_monot <- cummax(H)  # Garante que H(t) seja não decrescente
+# Sobrevivencia_estimada <- exp(-H_monot)
+# s_data = data_frame( tempo =  aalen_model$cum[,1],
+#                      Sobrevivencia_estimada )
+# plot(x = aalen_model$cum[,1],
+#      y = Sobrevivencia_estimada,
+#      type = "s", lwd = 2, col = "blue",
+#      xlab = "Tempo", ylab = "Probabilidade de Sobrevivência",
+#      main = "Função de Sobrevivência (Monótona) - Modelo de Aalen")
+# grid()
+# legend("topright", legend = "Sobrevivência Estimada", col = "blue", lwd = 2)
+# 
+# 
+# # Função de Risco acumulado 
+# df <- as.data.frame(aalen_model$cum)
+# df$time = df$time / 365
+# colnames(df) = c("Tempo", "intercepto", "Idade", "Nº de Radioterapia","Nº de Hormônio", 
+#                  "Nº de Quimioterapia", "Mama Direita", "Mama Esquerda", "Ambas as Mamas")
+# variaveis = colnames(df)[-1]
+# 
+# df_conf <- as.data.frame(aalen_model$var.cum)
+# df_conf$time = df_conf$time / 365
+# colnames(df_conf) = c("Tempo", "intercepto", "Idade", "Nº de Radioterapia","Nº de Hormônio", 
+#                       "Nº de Quimioterapia", "Mama Direita", "Mama Esquerda", "Ambas as Mamas")
+# 
+# df_long <- df %>%
+#   pivot_longer(cols = all_of(variaveis),
+#                names_to = "variavel", values_to = "coef_acumulado")
+# 
+# df_conf_long <- df_conf %>%
+#   pivot_longer(cols = all_of(variaveis),
+#                names_to = "variavel", values_to = "variancia")
+# 
+# df_combined <- left_join(df_long, df_conf_long, by = c("Tempo", "variavel"))
+# df_combined <- df_combined %>%
+#   mutate(se = sqrt(variancia),
+#          lower = coef_acumulado - 1.96 * se,
+#          upper = coef_acumulado + 1.96 * se)
+# 
+# ggplot(df_combined, aes(x = Tempo, y = coef_acumulado)) +
+#   geom_line(color = "steelblue", size = 1) +
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "steelblue") +
+#   facet_wrap(~ variavel, scales = "free") +
+#   theme_bw(base_size = 14) +
+#   labs(
+#     title = "Coeficientes Acumulados ao Longo do Tempo (Modelo de Aalen)",
+#     x = "Tempo (em Anos)",
+#     y = "Função de Risco acumulado"
+#   ) + theme_bw() +
+#   theme(strip.text = element_text(face = "bold"))
+# 
+# 
+# #função de sobrevivência 
+# coef_acumulados <- as.data.frame(aalen_model$cum)
+# tempo <- coef_acumulados$time / 365
+# coef_mat <- coef_acumulados[, !(colnames(coef_acumulados) %in% c("time"))]
+# # Define o vetor de covariáveis, incluindo o 1 para o intercepto
+# X <- c(1, 1, 1, 0, 1, 0, 0)  # intercepto + 6 covariáveis (ajuste conforme seu perfil)
+# H_t <- rowSums(as.matrix(coef_mat) * matrix(rep(X, each = nrow(coef_mat)), ncol = length(X), byrow = FALSE)) # Cálculo do risco acumulado H(t | X)
+# S_t <- exp(-H_t)
+# S_t <- pmin(S_t, 1)# Normalização para garantir que os valores não ultrapassem 1
+# df_surv <- data.frame(tempo = tempo, sobrevivencia = S_t)
+# ggplot(df_surv, aes(x = tempo, y = sobrevivencia)) +
+#   geom_line(color = "blue", size = 1.2) +
+#   labs(title = "Função de Sobrevivência Estimada pelo Modelo de Aalen",
+#        x = "Tempo (anos)", y = "Probabilidade de Sobrevivência") +
+#   theme_minimal(base_size = 14)
+
+```
+
+```{r, echo = F, warning= F, message= F}
+# modelo de aalen ponderado --------------------------------------------------------
+#ajustando o mesmo modelo de aalen com robustez, ou seja aplicando pesos
+# aalen_model1 <- survival::aareg(Surv(TempoCombinado, status) ~ 
+#                         idade_log + 
+#                         n_de_radio_log + 
+#                         n_de_hormonio_log +
+#                         n_de_quimio_log +
+#                         local_D+
+#                         local_E+
+#                         local_E_D
+#                        # terapia_adjuvante_fator
+#                       , data = dados) ;aalen_model1
+
+# lambda <- aalen_model1
+# surv <- exp(-lambda)# Calcula a função de sobrevivência S(t) = exp(-H(t))
+# plot(x = lambda[,1],  # Tempo (primeira coluna do hazard cumulativo)
+#      y = surv[,2],    # Sobrevivência (segunda coluna)
+#      type = "s",      # Tipo step function (escada)
+#      lwd = 2,         # Espessura da linha
+#      col = "blue",    # Cor
+#      xlab = "Tempo", 
+#      ylab = "Probabilidade de Sobrevivência",
+#      main = "Função de Sobrevivência - Modelo de Aalen")
+# grid()
+# legend("topright", 
+#        legend = "Sobrevivência Estimada",
+#        col = "blue", 
+#        lwd = 2)
+
+# # Função de Risco acumulado 
+# coef_acumulados <- aalen_model1$coefficient
+# tempos <- aalen_model1$time / 365  # convertendo tempo para anos
+# n_variaveis <- ncol(coef_acumulados)
+# n_tempos <- nrow(coef_acumulados)
+# coef_cumsum <- apply(coef_acumulados, 2, cumsum) #calcular a soma acumulada dos coeficientes
+# coef_cumsum <- rbind(0, coef_cumsum)  # adicionar 0 no tempo zero
+# erro_cumsum <- sqrt(apply(coef_acumulados^2, 2, cumsum))#calcular o erro padrão acumulado correto
+# erro_cumsum <- rbind(0, erro_cumsum)  # adicionar 0 no tempo zero
+# tempos_plot <- c(0, tempos)# Ajustar tempos (adicionar 0 no início)
+# nomes_variaveis <- c("Intercepto", "Idade", "Mama Direita", "Mama Esquerda","Ambas as Mamas" ,
+#                      "Nº de Hormônio", "Nº de Quimioterapia", "Nº de Radioterapia")
+# 
+# dados_plot <- data.frame(
+#   tempo = rep(tempos_plot, n_variaveis),
+#   variavel = rep(nomes_variaveis, each = length(tempos_plot)),
+#   coef = as.vector(coef_cumsum),
+#   se = as.vector(erro_cumsum)
+# )
+# dados_plot <- dados_plot %>%
+#   mutate(
+#     ic_inferior = coef - 1.96 * se,
+#     ic_superior = coef + 1.96 * se
+#   )
+# ggplot(dados_plot, aes(x = tempo, y = coef)) +
+#   geom_line(color = "steelblue", size = 1) +
+#   geom_ribbon(aes(ymin = ic_inferior, ymax = ic_superior), alpha = 0.2, fill = "steelblue") +
+#   facet_wrap(~ variavel, scales = "free") +
+#   theme_bw(base_size = 14) +
+#   labs(
+#     title = "Coeficientes Acumulados ao Longo do Tempo (Modelo de Aalen - aareg)",
+#     x = "Tempo (em Anos)",
+#     y = "Função de risco acumulado"
+#   ) +
+#   theme(strip.text = element_text(face = "bold"))
+# 
+# 
+# 
+# km_fit <- survfit(Surv(TempoCombinado, status) ~ n_de_radio_log, data = dados)
+# km_data <- summary(km_fit)
+# km_data$strata <- factor(km_data$strata, labels = c("Nº de Radioterapia <= 15", "Nº de Radioterapia > 15"))
+# Z <- c(1, 1, 1, 1, 1, 0, 1, 0)
+# cumhaz <- as.matrix(aalen_model$cum)
+# tempo_aalen <- aalen_model$cum[, "time"]
+# linpred <- cumhaz %*% Z
+# surv_est <- exp(-linpred)
+# 
+# # Montando data frame para plot com ggplot
+# aalen_data <- data.frame(
+#   time = tempo_aalen,
+#   surv = surv_est,
+#   metodo = "Aalen"
+# )
+# 
+# # 5. Plot usando ggplot2
+# ggplot() +
+#   geom_step(data = km_data, aes(x = time, y = surv, color = strata, linetype = strata), size = 1) +
+#   geom_line(data = aalen_data, aes(x = time, y = surv), color = "black", size = 1.2, linetype = "dashed") +
+#   labs(title = "Kaplan-Meier vs. Aalen Aditivo",
+#        x = "Tempo",
+#        y = "Probabilidade de Sobrevivência",
+#        color = "Grupo (KM)",
+#        linetype = "Grupo (KM)") +
+#   theme_minimal() +
+#   scale_color_manual(values = c("blue", "red")) +
+#   theme(legend.position = "bottom")
+```
+
+## **Modelo de Random Survival Forest**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# modelo Random survival Forest -------------------------------------------
+# Criação da variável interacao 
+#dados1$interacao <- dados1$n_de_hormonio* dados1$n_de_radio
+
+# Seleção das variáveis
+data1 = select(
+  dados1,
+  TempoCombinado,
+  status,
+  idade,
+  #local_fator,
+  #local_D,
+  #local_E,
+  #local_E_D,
+  n_de_hormonio,
+  #terapia_adjuvante_fator,
+  n_de_quimio,
+  n_de_radio,
+  #interacao
+  #p53,
+  #c_erb_b2,
+  #recptor_estrogenio,
+  #receptor_progesterone,
+  #ki_67_1,
+  #ki_67_2,
+  #ki_67_3 ,
+  #p53,
+  #subtipo_molecular,
+  #subtipo_molecular_1,
+  #subtipo_molecular_2,
+  #subtipo_molecular_3,
+  #subtipo_molecular_4
+)
+# data2 = select(
+#   dados,
+#   TempoCombinado,
+#   status,
+#   idade,
+#   local_fator,
+#   local_D,
+#   local_E,
+#   local_E_D,
+#   n_de_hormonio,
+#   terapia_adjuvante_fator,
+#   n_de_quimio,
+#   n_de_radio); attach(data2);glimpse(data2)
+
+#data=dados#data=dados#data=dados
+#str(data)
+#data$local = as.numeric(data$local)
+# data$local3=as.numeric(data$local3)
+# data$local4=as.numeric(data$local4)
+#data$terapia_adjuvante = as.numeric(data$terapia_adjuvante)
+#data$c_erb_b2 = as.factor(data$c_erb_b2)
+#data$receptor_progesterone = as.numeric(data$receptor_progesterone)
+#data$recptor_estrogenio = as.numeric(data$recptor_estrogenio)
+#data$`ki-67` = as.factor(dados$`ki-67`)
+#data$p53 = as.factor(data$p53)
+
+#ajuste com modelo de dados de treino
+set.seed(123456789)
+train <- sample(1:nrow(data1), round(nrow(data1) * 0.70))
+test = data1[-train , ]; attach(test)
+fit0 <- rfsrc(
+  Surv(TempoCombinado, status) ~ idade +
+    n_de_radio+
+    n_de_hormonio 
+    #interacao
+    #terapia_adjuvante_fator
+    #local_D +
+    #local_E +
+    #local_E_D
+    ,
+  cens.model = "rfsrc",
+  data = data1[train, ] ,
+  mtry = 5,
+  samptype =  "swr",
+  na.action = "na.impute",
+  nplit = NULL,
+  importance = TRUE,
+  splitrule = "logrank",
+  ntree = 10000
+)
+#saveRDS(fit0 , file = "fit0.rds")
+#fit0 <- readRDS("fit0.rds")
+
+
+#ajuste com modelo de dados de teste
+fit1 <- predict(fit0, test)
+
+# plot(data.pred$survival)  # Probabilidades de sobreviver até o tempo t
+# data.pred$err.rate  # Evolução do erro (útil para diagnosticar overfitting)
+# plot(data.pred$predicted) #A média do tempo de sobrevivência esperado para cada indivíduo no conjunto de teste.
+# data.pred$survival  # Probabilidades de sobreviver até o tempo t
+# data.pred$chf # função de risco acumulativo (CHF)
+# data.pred$err.rate  # Evolução do erro (útil para diagnosticar overfitting)
+# data.pred$importance # Importância das variáveis preditoras no modelo.
+# plot(fit0);  # Gráfico de erro e importância das variáveis
+# print(fit0); #informação a cerca do erro, importância e algumas outras informações pertinentes
+# data.pred$xvar  # Valores das variáveis de teste
+# data.pred$yvar  # Respostas observadas (para comparação)
+#plot.survival(fit0)
+
+cindex1 = 1 - fit0$err.rate[fit0$ntree]
+cindex2 = 1 - fit1$err.rate[fit1$ntree]
+
+
+#ajuste com dados completos
+set.seed(123456789)
+fit2 <- rfsrc(
+  Surv(TempoCombinado, status) ~ idade +
+    n_de_radio+
+    n_de_hormonio +
+    n_de_quimio
+    #interacao
+    #terapia_adjuvante_fator
+    #local_D +
+    #local_E +
+    #local_E_D
+    ,
+  cens.model = "rfsrc",
+  data = data1,
+  mtry = 5,
+  samptype =  "swr",
+  na.action = "na.impute",
+  nplit = NULL,
+  importance = TRUE,
+  splitrule = "logrank",
+  ntree = 10000
+)
+
+
+```
+
+## Resumo do insemble RSF (dados de treino e teste)
+
+```{r,  echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+format_rsf_compare <- function(fit0, fit1) {
+  library(kableExtra)
+  library(dplyr)
+
+  # Características em comum
+  caracteristicas <- c(
+    "Tamanho da amostra",
+    "Número de óbitos",
+    "Dados imputados",
+    "Número de árvores",
+    "Nós terminais mínimos",
+    "Nós terminais médios",
+    "Variáveis por divisão",
+    "Total de variáveis",
+    "Tipo de reamostragem",
+    "Tamanho da reamostra",
+    "Regra de divisão",
+    "Pontos de divisão aleatórios",
+    "Taxa de erro",
+    "C-index"
+  )
+
+  # Função auxiliar para extrair valores
+  extrai_info <- function(fit_object) {
+    valores <- c(
+      ifelse(!is.null(fit_object$n), fit_object$n, "-"),
+      ifelse(!is.null(fit_object$yvar), sum(fit_object$yvar[,2] == 1, na.rm = TRUE), "-"),
+      ifelse(is.null(fit_object$imputed.indv), "Não", "Sim"),
+      ifelse(!is.null(fit_object$ntree), fit_object$ntree, "-"),
+      ifelse(!is.null(fit_object$nodesize), fit_object$nodesize, "-"),
+      ifelse(!is.null(fit_object$leaf.count), round(mean(fit_object$leaf.count), 2), "-"),
+      ifelse(!is.null(fit_object$mtry), fit_object$mtry, "-"),
+      ifelse(!is.null(fit_object$xvar.names), length(fit_object$xvar.names), "-"),
+      ifelse(!is.null(fit_object$bootstrap), fit_object$bootstrap, "bootstrap"),
+      ifelse(!is.null(fit_object$sampsize), fit_object$sampsize, 
+             ifelse(!is.null(fit_object$n), paste0(round(fit_object$n * 0.632, 0), " (63.2%)"), "-")),
+      ifelse(!is.null(fit_object$splitrule), fit_object$splitrule, "logrank"),
+      ifelse(!is.null(fit_object$nsplit), fit_object$nsplit, "-"),
+      ifelse(!is.null(fit_object$err.rate), round(fit_object$err.rate[fit_object$ntree], 4), "-"),
+      ifelse(!is.null(fit_object$err.rate), round(1 - fit_object$err.rate[fit_object$ntree], 4), "-")
+    )
+    return(valores)
+  }
+
+  # Extrair para treino e teste
+  valores_treino <- extrai_info(fit0)
+  valores_teste  <- extrai_info(fit1)
+
+  # Montar data frame final
+  dados <- data.frame(
+    Característica = caracteristicas,
+    Treino = valores_treino,
+    Teste = valores_teste
+  )
+
+  # Tabela formatada
+  dados %>%
+    kable(
+      caption = "Random Survival Forest - Comparação entre Treino e Teste",
+      align = c("l", "c", "c"),
+      format = "html",
+      escape = FALSE
+    ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = TRUE,
+      position = "center",
+      font_size = 16
+    ) %>%
+    row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+    column_spec(1, bold = TRUE, width = "5cm") %>%
+    add_header_above(
+      c(" " = 1, "Resultados do Ensemble" = 2),
+      background = "#34495e", color = "white"
+    )
+}
+
+# Uso
+format_rsf_compare(fit0, fit1)
+
+
+```
+
+#### o modelo ( RSF ) por mais que seja um método de interação com certa robustez a \textit{outliers} ou pontos influentes, tais unidades foram deixados fora da modelagem ( RSF ), a abordagem foi ajustada considerando cerca de 10000 árvores tanto em dados de treino e teste, não foi utilizado nenhum processo de imputação, pois apenas utilizamos dados completos, no primeiro cenário com cerca de 70% dos dados, isso corresponde cerca de 146 unidade amostras, das quais cerca de 35 são óbitos. o número de nós terminais médio foi aproximadamente 10, apresentou um erro OOB de 18,54% e índice de concordância \textit{(C-index)} de 81,46%, indicando bom poder discriminatório para predizer a sobrevivência. Para dados de treino, rodamos o mesmo modelo com objetivo de verificar a possibilidade de \textit{overfitting}, quando um modelo de aprendizado de máquina ou estatístico se ajusta excessivamente aos dados de treinamento, capturando não apenas os padrões gerais, mas também o ruído ou variações aleatórias presentes nos dados, apresentando excelente desempenho nos dados de treinamento, mas desempenho ruim em dados de teste, mostrando baixa capacidade de generalização. A amostra destinada o ajuste de treino possui cerca de 30% da base original, com cerca 61 indivíduos, dos quais 12 apresentaram o evento de interesse, apresentou um erro OOB de 18,54% e índice de concordância \textit{(C-index)} de 81,46%. Esses resultados confirmam que o RSF é uma ferramenta robusta para identificar fatores prognósticos e gerar estimativas individualizadas de sem viés de \textit{overfitting} e apresentando ótimo desempenho.
+
+## **Visualização gráfica da Taxa de Erro e a VIMP**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(plotly)
+library(ggplot2)
+library(dplyr)
+library(forcats)
+
+# Preparar tabela de importância
+table1 <- as.data.frame(fit2$importance) %>%
+  tibble::rownames_to_column(var = "Variável") %>%
+  arrange(desc(`fit2$importance`))
+
+table1$Variável <- c("Nº de Hormônioterapia",
+                     "Idade",
+                     "Nº de Radioterapia",
+                     "Nº de Quimioterapia")
+
+# Gráfico de barras
+R1 <- ggplot(table1, aes(x = fct_reorder(Variável, `fit2$importance`), 
+                         y = `fit2$importance`)) +
+  geom_bar(stat = "identity", fill = "darkblue", color = "black") +
+  coord_flip() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 16))
+
+# Gráfico da taxa de erro
+erro_df <- data.frame(
+  trees = seq(0, 10000, length.out = 1000),
+  error_rate = na.omit(fit2$err.rate)
+)
+
+R2 <- ggplot(erro_df, aes(x = trees, y = error_rate)) +
+  geom_line(color = "black", size = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 16),
+        axis.text.y = element_text(size = 16)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+
+# Transformar em plotly
+R1_interativo <- ggplotly(R1)
+R2_interativo <- ggplotly(R2)
+
+# Combinar em uma grade 1x2 e definir títulos diretamente no layout
+subplot(
+  R1_interativo, R2_interativo,
+  nrows = 1,
+  shareX = FALSE, shareY = FALSE,
+  margin = 0.05
+) %>%
+  layout(
+    width = 1200,
+    height = 600,
+    showlegend = FALSE,
+    annotations = list(
+      list(x = 0.2, y = 1.05, text = "Importância das Variáveis", 
+           xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 18)),
+      list(x = 0.8, y = 1.05, text = "Taxa do Erro", 
+           xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 18)),
+      list(x = 0.15, y = -0.16, text = "Grau de Importância", 
+           xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 18)),
+      list(x = 0.85, y = -0.16, text = "Número de Árvores", 
+           xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 18))
+    )
+  )
+```
+
+#### Da análise feita, observamos que o modelo completo (sem a devisão trein/test) apresentou bons resultados, com uma taxa de erro bem perquena se estabilizando 0,1333, também podemos observar o importancia, para a abordagem do RSF temos que a variável **Nº de Hormonioterapia no geral foi a que mais constribuiu no modelo, demais ficaram em torno de 0.06 á 0.01, isso é importante visto que num cenário onde a VIMP apresentase algum valor negativo isso é um indicativo que alguma forma estaria atrapallhando o desempenho do modelo**. Próximos passos, comparar os resultados do modelo de machine learning com um modelo de sobrevivÊncias antes discurtido. Detalhes dodo conjunto da floresta gerada está abaixo.
+
+## **Desempenho do modelo preditivo**
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(gridExtra)
+library(patchwork)
+plot_survival_gg <- function(x, show.plots = TRUE, subset, collapse = FALSE, cens.model = c("km", "rfsrc"), ...) {
+  
+  # Verificações iniciais
+  if (is.null(x)) {
+    stop("object x is empty!")
+  }
+  if (sum(inherits(x, c("rfsrc", "grow"), TRUE) == c(1, 2)) != 2 & 
+      sum(inherits(x, c("rfsrc", "predict"), TRUE) == c(1, 2)) != 2) {
+    stop("This function only works for objects of class `(rfsrc, grow)' or '(rfsrc, predict)'")
+  }
+  if (x$family != "surv") {
+    stop("this function only supports right-censored survival settings")
+  }
+  
+  # Obter objeto Brier
+  brier.obj <- get.brier.survival(x, subset, cens.model)
+  brier.matx <- brier.obj$brier.matx
+  brier.score.df <- brier.obj$brier.score
+  mort <- brier.obj$mort
+  surv.ensb <- brier.obj$surv.ensb
+  surv.aalen <- brier.obj$surv.aalen
+  event.info <- brier.obj$event.info
+  test.event.info <- brier.obj$test.event.info
+  subset <- brier.obj$subset
+  
+  # Calcular quartis de mortalidade
+  mort.perc <- c(min(mort, na.rm = TRUE) - 1e-05, quantile(mort, (1:4)/4, na.rm = TRUE))
+  
+  # Calcular Brier Score por quartis
+  brier.score <- data.frame(cbind(
+    do.call(cbind, lapply(1:4, function(k) {
+      mort.pt <- (mort > mort.perc[k]) & (mort <= mort.perc[k + 1])
+      colMeans(brier.matx[mort.pt, , drop = FALSE], na.rm = TRUE)
+    })), 
+    brier.score.df$brier.score
+  ))
+  
+  colnames(brier.score) <- c("bs.q25", "bs.q50", "bs.q75", "bs.q100", "bs.all")
+  brier.score$time <- event.info$time.interest / 365.25  # Converter para anos
+  
+  # Calcular CRPS
+  crps <- do.call(cbind, lapply(1:5, function(k) {
+    sapply(1:length(event.info$time.interest), function(j) {
+      trapz(event.info$time.interest[1:j] / 365.25, brier.score[1:j, k]) / 
+        diff(range(event.info$time.interest[1:j] / 365.25))
+    })
+  }))
+  
+  colnames(crps) <- c("crps.q25", "crps.q50", "crps.q75", "crps.q100", "crps.all")
+  crps <- as.data.frame(crps)
+  crps$time <- event.info$time.interest / 365.25  # Converter para anos
+  
+  # Definir labels
+if (is.null(x$predicted.oob)) {
+  ylab.1 <- "Sobrevivência"
+  ylab.2 <- "Escore de Brier"
+  ylab.3 <- "CRPS"
+  ylab.4 <- "Mortalidade vs Tempo (anos)"
+} else {
+  ylab.1 <- "Sobrevivência OOB"
+  ylab.2 <- "Escore de Brier OOB"
+  ylab.3 <- "CRPS OOB"
+  ylab.4 <- "Mortalidade OOB vs Tempo (anos)"
+}
+
+  
+  surv.mean.ensb <- rowMeans(surv.ensb, na.rm = TRUE)
+  if (collapse) {
+    surv.ensb <- rowMeans(surv.ensb, na.rm = TRUE)
+  }
+  
+  # -------------------------------
+  # 1) Curvas de Sobrevivência - TEMPO EM ANOS
+  # -------------------------------
+  df_surv <- as.data.frame(surv.ensb)
+  df_surv$time <- event.info$time.interest / 365.25  # Converter para anos
+  
+  # Amostrar se necessário (como no original)
+  if (!collapse && ncol(surv.ensb) > 500) {
+    r.pt <- sample(1:ncol(surv.ensb), 500, replace = FALSE)
+    df_surv_long <- pivot_longer(df_surv[, c("time", names(df_surv)[r.pt])], 
+                                 -time, names_to = "id", values_to = "surv")
+  } else {
+    df_surv_long <- pivot_longer(df_surv, -time, names_to = "id", values_to = "surv")
+  }
+  
+  df_mean <- data.frame(time = event.info$time.interest / 365.25, surv = surv.mean.ensb)
+  
+  # Dados para rug plot
+  rug_data <- data.frame(time = event.info$time.interest / 365.25)
+  
+  p1 <- ggplot() +
+    geom_line(data = df_surv_long, aes(x = time, y = surv, group = id), 
+              color = "gray35", linetype = 3, alpha = 0.4, linewidth = 0.3) +
+    geom_line(data = df_mean, aes(x = time, y = surv), 
+              color = "red", linetype = 1, linewidth = 1.4) +
+    geom_rug(data = rug_data, aes(x = time), sides = "b", length = unit(0, "npc")) +
+    labs(x = "Tempo em (Anos)", y = ylab.1) +
+    theme_bw()
+  
+  # Adicionar linha de Aalen se existir
+  if (!is.null(surv.aalen)) {
+    df_aalen <- data.frame(time = event.info$time.interest / 365.25, surv = surv.aalen)
+    p1 <- p1 + geom_line(data = df_aalen, aes(x = time, y = surv), 
+                         color = "darkgreen", linetype = 1, linewidth = 1.4)
+  }
+  
+  # -------------------------------
+  # 2) Brier Score - CORREÇÃO: ORDEM INVERTIDA (MAIOR PARA MENOR)
+  # -------------------------------
+  brier_long <- pivot_longer(brier.score, -time, names_to = "quartile", values_to = "value")
+  
+  # Definir o intervalo correto para CADA linha individualmente - ORDEM INVERTIDA
+  interval_labels <- c(
+    "bs.q25" = "75-100",  # Primeira linha preta = sempre 75-100 (MAIOR)
+    "bs.q50" = "50-75",   # Segunda linha preta = sempre 50-75  
+    "bs.q75" = "25-50",   # Terceira linha preta = sempre 25-50
+    "bs.q100" = "0-25",   # Quarta linha preta = sempre 0-25 (MENOR)
+    "bs.all" = "All"      # Linha vermelha = sempre All
+  )
+  
+  p2 <- ggplot(brier_long, aes(x = time, y = value, color = quartile, linetype = quartile, size = quartile)) +
+    geom_line() +
+    scale_color_manual(values = c("bs.q25" = "black", "bs.q50" = "black", 
+                                  "bs.q75" = "black", "bs.q100" = "black", "bs.all" = "red"),
+                       labels = interval_labels) +
+    scale_linetype_manual(values = c("bs.q25" = 1, "bs.q50" = 2, 
+                                     "bs.q75" = 3, "bs.q100" = 4, "bs.all" = 1),
+                          labels = interval_labels) +
+    scale_size_manual(values = c("bs.q25" = 1, "bs.q50" = 1, 
+                                 "bs.q75" = 1, "bs.q100" = 1, "bs.all" = 1.4),
+                      labels = interval_labels) +
+    labs(x = "Tempo em (Anos)", y = ylab.2, color = "Quartile", linetype = "Quartile", size = "Quartile") +
+    theme_bw() +
+    theme(legend.position = "none")
+  
+  # Adicionar rug plot
+  p2 <- p2 + geom_rug(data = rug_data, aes(x = time), sides = "b", length = unit(0, "npc"), inherit.aes = FALSE)
+  
+  # Adicionar texto dos quartis - ORDEM INVERTIDA (MAIOR PARA MENOR)
+  point.x <- round(length(event.info$time.interest) * 0.75)  # Ponto a 75% do tempo
+  text_data <- data.frame(
+    time = rep(event.info$time.interest[point.x] / 365.25, 4),
+    value = as.numeric(brier.score[point.x, 1:4]),
+    label = c("0-25","25-50","50-75","75-100")  # Ordem correta: maior para menor
+  )
+  
+  p2 <- p2 + geom_text(data = text_data, aes(x = time, y = value, label = label), 
+                       color = "blue", size = 4.5, inherit.aes = FALSE)
+  
+  # -------------------------------
+  # 3) CRPS - CORREÇÃO: ORDEM INVERTIDA (MAIOR PARA MENOR)
+  # -------------------------------
+  crps_long <- pivot_longer(crps, -time, names_to = "quartile", values_to = "value")
+  
+  p3 <- ggplot(crps_long, aes(x = time, y = value, color = quartile, linetype = quartile, size = quartile)) +
+    geom_line() +
+    scale_color_manual(values = c("crps.q25" = "black", "crps.q50" = "black", 
+                                  "crps.q75" = "black", "crps.q100" = "black", "crps.all" = "red"),
+                       labels = interval_labels) +
+    scale_linetype_manual(values = c("crps.q25" = 1, "crps.q50" = 2, 
+                                     "crps.q75" = 3, "crps.q100" = 4, "crps.all" = 1),
+                          labels = interval_labels) +
+    scale_size_manual(values = c("crps.q25" = 1, "crps.q50" = 1, 
+                                 "crps.q75" = 1, "crps.q100" = 1, "crps.all" = 1.4),
+                      labels = interval_labels) +
+    labs(x = "Tempo em (Anos)", y = ylab.3, color = "Quartile", linetype = "Quartile", size = "Quartile") +
+    theme_bw() +
+    theme(legend.position = "none")
+  
+  # Adicionar rug plot
+  p3 <- p3 + geom_rug(data = rug_data, aes(x = time), sides = "b", length = unit(0, "npc"), inherit.aes = FALSE)
+  
+  # Adicionar texto dos quartis - ORDEM INVERTIDA (MAIOR PARA MENOR)
+  text_data_crps <- data.frame(
+    time = rep(event.info$time.interest[point.x] / 365.25, 4),
+    value = as.numeric(crps[point.x, 1:4]),
+    label = c("0-25","25-50","50-75","75-100") 
+  )
+  
+  p3 <- p3 + geom_text(data = text_data_crps, aes(x = time, y = value, label = label), 
+                       color = "blue", size = 4.5, inherit.aes = FALSE)
+  
+  # -------------------------------
+  # 4) Mortalidade vs Tempo - CORREÇÃO PARA FICAR IGUAL AO ORIGINAL
+  # -------------------------------
+  if (!is.null(x$yvar)) {
+    yvar <- as.data.frame(x$yvar[subset, , drop = FALSE])
+    colnames(yvar) <- c("time", "cens")
+    df_mort <- data.frame(time = yvar$time / 365.25, mort = mort, cens = factor(yvar$cens))  # Converter para anos
+    
+    # Definir tamanho dos pontos como no original
+    point_size <- ifelse(x$n > 500, 0.5, 1)
+    
+    p4 <- ggplot(df_mort, aes(x = time, y = mort)) +
+      # Pontos para eventos (cens != 0) - AZUL como no original
+      geom_point(data = subset(df_mort, cens == 1), 
+                 color = "blue", shape = 16, size = point_size, alpha = 0.8) +
+      
+      # Pontos para censuras (cens == 0) - PRETO como no original
+      geom_point(data = subset(df_mort, cens == 0), 
+                 color = "black", shape = 16, size = point_size, alpha = 0.8) +
+      
+      labs(x = "Tempo em (Anos)", y = ylab.4) +
+      theme_bw() +
+      theme(legend.position = "none")
+    
+    # Adicionar linhas SUAVIZADAS como no original - CORREÇÃO
+    # Para eventos (cens != 0)
+    if (sum(yvar$cens != 0) > 1) {
+      df_event <- df_mort[df_mort$cens == 1, ]
+      df_event <- df_event[order(df_event$time), ]
+      
+      # Suavização com stats::supsmu (equivalente ao original)
+      supsmu_event <- supsmu(df_event$time, df_event$mort)
+      df_event_smooth <- data.frame(time = supsmu_event$x, mort = supsmu_event$y)
+      
+      p4 <- p4 + geom_line(data = df_event_smooth, aes(x = time, y = mort), 
+                           color = "blue", linetype = 3, linewidth = 1, alpha = 0.8)
+    }
+    
+    # Para censuras (cens == 0)
+    if (sum(yvar$cens == 0) > 1) {
+      df_censored <- df_mort[df_mort$cens == 0, ]
+      df_censored <- df_censored[order(df_censored$time), ]
+      
+      # Suavização com stats::supsmu (equivalente ao original)
+      supsmu_censored <- supsmu(df_censored$time, df_censored$mort)
+      df_censored_smooth <- data.frame(time = supsmu_censored$x, mort = supsmu_censored$y)
+      
+      p4 <- p4 + geom_line(data = df_censored_smooth, aes(x = time, y = mort), 
+                           color = "black", linetype = 3, linewidth = 1, alpha = 0.8)
+    }
+    
+    # Adicionar rug plot apenas para eventos (como no original)
+    if (sum(yvar$cens != 0) > 1) {
+      rug_event <- data.frame(time = yvar$time[yvar$cens != 0] / 365.25)  # Converter para anos
+      p4 <- p4 + geom_rug(data = rug_event, aes(x = time), 
+                          sides = "b", 
+                          length = unit(-0.03, "npc"), 
+                          color = "blue", 
+                          alpha = 0.6,
+                          inherit.aes = FALSE)
+    }
+  } else {
+    p4 <- ggplot() + 
+      labs(title = "No mortality data available", x = "Tempo em (Anos)", y = ylab.4) + 
+      theme_bw()
+  }
+  
+  # -------------------------------
+  # Combinar os gráficos
+  # -------------------------------
+  if (show.plots) {
+    combined_plot <- (p1 + p2) / (p3 + p4) + 
+      plot_annotation(title = "Gráficos de Análise de Sobrevivência") &
+      theme(plot.title = element_text(hjust = 0.5))
+    
+    print(combined_plot)
+  }
+  
+  # Retornar dados invisivelmente (como no original)
+  invisible(data.frame(time = event.info$time.interest / 365.25, brier.score, crps))
+}
+
+plot_survival_gg(fit2) 
+
+```
+
+#### **Na figura acima podemos ter ma ideia do desenpenho da modelagem do RSF, no canto supeior direiito temos as curvas estimadas de sobrevivência onde podem v**isualizar a probabilidade de sobrevivência ao longo do tempo. Cada linha cinza representa a curva de sobrevivência por indivíduo, mostrando a variabilidade das previsões, a linha vermelha e verde indica respectivamente a a curva média geral e a estimada via nelson aalen. Curvas que se mantêm à direita do gráfico sugerem maior tempo de sobrevivência previsto, enquanto quedas abruptas indicam maior risco de evento. No canto superior direito tem Escore **Brier Score,** métrica essa que avalia a precisão das previsões em pontos específicos no tempo onde valores variam de 0 (previsão perfeita) a 0,25 (equivalente a chance aleatória). As diferentes linhas representam estratificações por grupos de risco, valores mais baixos indicam melhor desempenho preditivo do modelo, nota-se que modelo se mantém abaixo de 0.20 na maior parte do tempo e apenas no final que apresenta um leve aumento porém nunca ultrapsando esse valor. **CRPS (Continuous Ranked Probability Score)** medida abrangente que avalia a qualidade das distribuições de probabilidade completas previstas pelo modelo. Integra o Brier Score ao longo de todo o tempo de estudo, observamos que apresenta valores próximos de zero indicando excelente desempenho. O último gráfico **Mortality vs Time:** Análise de calibração que compara as previsões de mortalidade com os eventos observados. Pontos azuis representam óbitos ocorridos, enquanto pontos pretos indicam censuras (pacientes que saíram do estudo). A dispersão dos pontos e as linhas de tendência permitem avaliar se o modelo está bem calibrado em relação à realidade observada, observamos dados bem dispersos, o que corrobora o bom desempenho.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+#rfsrc.obj <- fit0
+#v.max <- max.subtree(rfsrc.obj)
+#v.max
+
+#yvar <- fit0$yvar
+#rsf.pred <- fit0$predicted
+#rsf.err <- randomForestSRC:::get.cindex(yvar$TempoCombinado, yvar$status, rsf.pred)
+
+# tempos <- data.pred$time.interest
+# probabilidades <- data.pred$survival
+# library(tidyr)
+# dados_plot <- data.frame(
+#   Paciente = rep(1:nrow(probabilidades), each = length(tempos)),
+#   Tempo = rep(tempos, times = nrow(probabilidades)),
+#   Sobrevivencia = as.vector(t(probabilidades)) # Converter para formato longo (melhor para ggplot2)
+# )
+# 
+# R3 = ggplot(dados_plot, aes(x = Tempo/365, y = Sobrevivencia, group = Paciente)) +
+#   geom_line(alpha = 0.3, color = "steelblue", size = 1) +  # Linhas transparentes
+#   labs(
+#     title = "Probabilidade de Sobrevivênciavia RSF",
+#     x = "Tempo em Anos",
+#     y =  expression("Probabilidade de Sobrevivência"~~ S(t))
+#   ) + 
+#   theme_bw(base_size = 14)
+# 
+# tempos <- data.pred$time.interest/365
+# Risco_acumulado <- data.pred$chf
+# 
+# dados_plot <- data.frame(
+#   Paciente = rep(1:nrow(Risco_acumulado), each = length(tempos)),
+#   Tempo = rep(tempos, times = nrow(Risco_acumulado)),
+#   Risco_acumulado = as.vector(t(Risco_acumulado)) # Converter para formato longo (melhor para ggplot2)
+# )
+# 
+# R4 = ggplot(dados_plot, aes(x = Tempo, y = Risco_acumulado, group = Paciente)) +
+#   geom_line(alpha = 0.3, color = "steelblue", size = 1) +  # Linhas transparentes
+#   labs(
+#     title = "Função de Risco acumulativo via RSF",
+#     x = "Tempo em Anos",
+#     y = expression("Função de Risco Acumulativo " ~~ H(t))
+#   ) +
+#   theme_bw(base_size = 14)
+# 
+# gridExtra::grid.arrange(R3, R4, ncol = 2, nrow = 1)
+```
+
+```{r, echo = F, warning= F, message= F}
+## 
+## pbc survival example
+## 
+# hv <- holdout.vimp(
+#   Surv(TempoCombinado, status) ~
+#     idade_log +
+#     n_de_hormonio_log +
+#     #n_de_quimio_log +
+#     n_de_radio_log,
+#   data = data1,
+#   splitrule = "random"
+# )
+# print(100 * hv)
+```
+
+```{r, echo = F, warning= F, message= F}
+################# Encontrar interrações #############
+#find.interaction(fit0, method = "vimp", nvar = 8)
+
+######################### Análise Gráfica das Variáveis #########################
+######################Efeitos Marginais e Predições Parciais#####################
+# Esta seção foca na visualização das variáveis usadas no modelo RSF (Random Survival Forest)
+# incluindo a análise dos efeitos marginais (efeito isolado de cada variável sobre a sobrevivência)
+# e as curvas de predição da probabilidade de sobrevivência.
+
+## Cálculo dos Efeitos Parciais ##
+# partial.obj <- partial(
+#   fit0,                            # Modelo RSF já ajustado
+#   partial.type = "rel.freq",       # Tipo de efeito marginal: frequência relativa (ideal para variáveis categóricas)
+#   partial.xvar = "idade_log",   # Variável de interesse para análise marginal
+#   partial.values = fit0$xvar[, "idade_log"], # Valores da variável a serem considerados (níveis de fator)
+#   partial.time = fit0$time.interest            # Tempos para os quais a sobrevivência será avaliada
+# ); partial.obj
+# Essa função calcula os efeitos marginais parciais da variável "idade_log"
+# sobre a probabilidade de sobrevivência, mantendo as demais variáveis constantes.
+# Ideal para interpretar o impacto individual de uma variável específica no tempo de vida estimado.
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+## ------------------ Visualização geral das variáveis ------------------ ##
+# plot.variable(fit0, plots.per.page = 3)
+# gg_var <- gg_variable(fit0)
+# # Gráfico da distribuição das variáveis preditoras (gráficos simples por variável)
+# ggplot(gg_var, aes(x = x)) +
+#   geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+#   facet_wrap(~ xvar, scales = "free", ncol = 3) +
+#   labs(
+#     title = "Distribuição das variáveis no modelo RSF",
+#     x = "Valor da variável",
+#     y = "Frequência"
+#   ) +
+#   theme_minimal()
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+# Cria gráficos descritivos das variáveis do modelo, 3 por página.
+# Exibe distribuições e contribuições individuais para o modelo.
+
+## ------------------ Curvas de sobrevivência no tempo 75 ------------------ ##
+# p.v = plot.variable(
+#   fit0,
+#   surv.type = "surv",   # Tipo de plotagem: curva de sobrevivência
+#   nvar = 8,             # Mostrar as 8 variáveis mais importantes
+#   time = 75             # Avaliar a sobrevivência no tempo 75
+# )
+# Gera um gráfico que mostra, para cada uma das 8 variáveis mais relevantes,
+# como a probabilidade de sobrevivência no tempo 75 varia com os valores da variável.
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+## ------------------ Efeitos marginais no tempo 2000 ------------------ ##
+# p.v = plot.variable(
+#   fit0,
+#   surv.type = "surv",    # Tipo de saída: sobrevivência
+#   plots.per.page = 3,    # Número de gráficos por página
+#   partial = TRUE,        # Ativa os efeitos marginais
+#   time = 2000,           # Tempo específico para avaliar a sobrevivência
+#   smooth.lines = TRUE    # Aplica suavização às curvas para melhor visualização
+# )
+# Esse gráfico mostra o efeito marginal (isolado) de cada variável na probabilidade
+# de sobrevivência no tempo 2000, com curvas suavizadas.
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+## ------------------ Exemplo: uso do plot.variable com objeto pré-processado ------------------ ##
+# Aqui mostramos como reaproveitar o objeto p.v já gerado com plot.variable()
+# e usá-lo diretamente para visualização.
+# p.v <- plot.variable(
+#   fit0,             # Objeto RSF ajustado (aqui, possivelmente outro modelo)
+#   surv.type = "surv",    # Tipo de gráfico: sobrevivência
+#   partial = TRUE,        # Mostrar efeitos marginais
+#   nvar = 8,              # As 8 variáveis mais importantes
+#   smooth.lines = TRUE    # Usar curvas suavizadas
+# )
+# Útil quando se quer gerar gráficos a partir de um objeto já existente
+# com controle refinado de quais variáveis e tipos de efeitos exibir.
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+##------ Variance Importance ------##
+
+# #default call corresponds to minimal depth selection
+# vs.pbc <- var.select(object = fit0)
+# topvars <- vs.pbc$topvars
+# 
+# # the above is equivalent to
+# max.subtree(fit0)$topvars
+# 
+# # different levels of conservativeness
+# var.select(object = fit0, conservative = "low")
+# var.select(object = fit0, conservative = "medium")
+# var.select(object =fit0, conservative = "high")
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+##----- IBS ------##
+# testdata2 = na.omit(data2[-train, ])
+# set.seed(1345)
+# require(pec)
+# library("prodlim")
+# pec.f <- as.formula(
+#   Hist(futime, status) ~ idade +
+#     n_de_radio_log +
+#     n_de_quimio_log +
+#     n_de_hormonio_log 
+# )
+# prederror.pbc  <- pec(
+#   rfsrc.obj,
+#   data = testdata2,
+#   formula = pec.f,
+#   splitMethod = "BootCv",
+#   B = 100
+# )
+# print(prederror.pbc)
+# plot(prederror.pbc)
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(randomForestSRC)
+library(flexsurv)
+library(survival)
+library(Hmisc)
+library(dplyr)
+library(kableExtra)
+
+# # =============================
+# # 1️⃣ RSF: calcular risco e Brier Score
+# # =============================
+# # Previsão de sobrevivência
+# rsf_surv <- predict(fit0, newdata = dados1)$survival  # linhas = pacientes, colunas = tempos
+# rsf_pred <- 1 - rsf_surv[, ncol(rsf_surv)]           # risco = 1 - probabilidade de sobreviver até o último tempo
+# 
+# # C-index RSF
+# cindex_rsf <- Hmisc::rcorr.cens(rsf_pred, Surv(dados1$TempoCombinado, dados1$status))
+# cindex_rsf_valor <- cindex_rsf["C Index"]
+# 
+# # Brier Score RSF
+# brier_rsf <- mean((rsf_pred - (dados1$status == 1))^2)  # aproximação simples no tempo final
+# 
+# # =============================
+# # 2️⃣ Lognormal: calcular risco e Brier Score
+# # =============================
+# # Tempo médio esperado para cada paciente
+# expected_time <- sapply(1:nrow(dados1), function(i) {
+#   predict(modelo_lognormal1, newdata = dados1[i, , drop = FALSE], type = "mean")[[1]]
+# })
+# 
+# # Score de risco: quanto menor o tempo esperado, maior o risco
+# risk_lognormal <- 1 / expected_time
+# 
+# # C-index Lognormal
+# cindex_lognormal <- Hmisc::rcorr.cens(risk_lognormal, Surv(dados1$TempoCombinado, dados1$status))
+# cindex_lognormal_valor <- cindex_lognormal["C Index"]
+# 
+# # Brier Score Lognormal
+# # Transformar tempo esperado em probabilidade de evento no tempo máximo observado
+# # Aproximação: risco = 1 se tempo esperado <= tempo observado, 0 caso contrário
+# brier_lognormal <- mean((risk_lognormal - (dados1$status == 1))^2)
+# 
+# # =============================
+# # 3️⃣ Criar tabela comparativa
+# # =============================
+# cindex_brier_df <- data.frame(
+#   Modelo = c("RSF", "Lognormal"),
+#   C_index = c(round(cindex_rsf_valor, 3), round(cindex_lognormal_valor, 3)),
+#   Brier_Score = c(round(brier_rsf, 3), round(brier_lognormal, 3))
+# )
+# 
+# # =============================
+# # 4️⃣ Gerar tabela HTML estilizada
+# # =============================
+# cindex_brier_df %>%
+#   kable(
+#     caption = "Desempenho dos Modelos: C-index e Brier Score",
+#     align = c("l", "c", "c"),
+#     format = "html",
+#     escape = FALSE
+#   ) %>%
+#   kable_styling(
+#     bootstrap_options = c("striped", "hover", "condensed"),
+#     full_width = TRUE,
+#     position = "center",
+#     font_size = 16
+#   ) %>%
+#   row_spec(0, background = "#2c3e50", color = "white", bold = TRUE) %>%
+#   column_spec(1, bold = TRUE, width = "4cm") %>%
+#   add_header_above(
+#     c(" " = 1, "Desempenho do Modelo" = 2),
+#     background = "#34495e", color = "white"
+#   )
+
+```
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(survival)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(survival)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+# -------------------------
+# 1. Kaplan-Meier
+# -------------------------
+km_model <- survfit(Surv(TempoCombinado, status) ~ 1, data = dados1)
+km_surv <- data.frame(
+  time  = km_model$time,
+  surv  = km_model$surv,
+  lower = km_model$lower,
+  upper = km_model$upper,
+  model = "Kaplan-Meier"
+)
+
+# -------------------------
+# 2. Nelson-Aalen (também com S(t))
+# -------------------------
+na_model <- survfit(Surv(TempoCombinado, status) ~ 1, data = dados1, type = "fh")
+na_surv <- data.frame(
+  time  = na_model$time,
+  surv  = na_model$surv,
+  lower = na_model$lower,
+  upper = na_model$upper,
+  model = "Nelson-Aalen"
+)
+
+# -------------------------
+# 3. Lognormal
+# -------------------------
+coef_log <- coef(modelo_lognormal1)  # Coeficientes
+sigma_log <- modelo_lognormal$scale  # Desvio padrão
+
+times_log <- seq(1, max(dados1$TempoCombinado), length.out = 100)
+surv_mean <- numeric(length(times_log))
+
+for (t in 1:length(times_log)) {
+  survival_values <- numeric(nrow(dados1))
+  for (i in 1:nrow(dados1)) {
+    nova_obs <- dados1[i, ]
+    X <- model.matrix(~ idade_fator1 + 
+                        n_de_hormonio_fator1 + 
+                        n_de_radio_fator1 + 
+                        n_de_quimio_fator1 +
+                        n_de_hormonio_fator1 * n_de_radio_fator1, data = nova_obs)
+    survival_values[i] <- 1 - pnorm((log(times_log[t]) - sum(X * coef_log)) / sigma_log)
+  }
+  surv_mean[t] <- mean(survival_values)
+}
+
+lognorm_surv <- data.frame(
+  time  = times_log,
+  surv  = surv_mean,
+  lower = NA,  # sem IC nesse exemplo
+  upper = NA,
+  model = "Lognormal"
+)
+
+# -------------------------
+# 4. Random Survival Forest (RSF)
+# -------------------------
+RF_surv <- data.frame(
+  time  = fit2$time.interest,
+  surv  = colMeans(fit2$survival),
+  lower = NA,  # sem IC nesse exemplo
+  upper = NA,
+  model = "Random Survival Forest"
+)
+
+# -------------------------
+# 5. Combina todos os dados
+# -------------------------
+surv_data <- rbind(km_surv, lognorm_surv, RF_surv)
+
+# -------------------------
+# 6. Calcula tempo correspondente à sobrevivência de 50%
+# -------------------------
+medianas_surv <- surv_data %>%
+  group_by(model) %>%
+  summarise(mediana = approx(surv, time, xout = 0.5, rule = 2)$y)
+
+# -------------------------
+# 7. Gráfico ggplot com IC
+# -------------------------
+p_surv <- ggplot() +
+  # Intervalos de confiança (somente KM e NA)
+  geom_ribbon(data = km_surv,
+              aes(x = time/365, ymin = lower, ymax = upper),
+              alpha = 0.1, fill = "blue") +
+  #geom_ribbon(data = na_surv,
+  #            aes(x = time/365, ymin = lower, ymax = upper),
+  #            alpha = 0.1, fill = "darkgreen") +
+  
+  # Curvas de sobrevivência
+  geom_step(data = km_surv, aes(x = time/365, y = surv, color = model), size = 1) +
+ # geom_step(data = na_surv, aes(x = time/365, y = surv, color = model), size = 1, linetype = "dotdash") +
+  geom_line(data = lognorm_surv, aes(x = time/365, y = surv, color = model), size = 1, linetype = "dashed") +
+  geom_line(data = RF_surv, aes(x = time/365, y = surv, color = model), size = 1, linetype = "dashed") +
+  
+  # Linha horizontal em S(t) = 0.5
+  geom_hline(yintercept = 0.5, linetype = "dotted", color = "black") +
+  
+  # Linhas verticais para tempo mediano
+  geom_segment(data = medianas_surv,
+               aes(x = mediana/365, xend = mediana/365, y = 0, yend = 0.5, color = model),
+               linetype = "dashed") +
+  
+  labs(title = "Curvas de Sobrevivência",
+       x = "Tempo (anos)",
+       y = "Sobrevivência S(t)",
+       color = "Modelos") +
+  scale_x_continuous(breaks = seq(0, 15, 2)) +
+  scale_color_manual(values = c("Kaplan-Meier" = "blue",
+                               # "Nelson-Aalen" = "darkgreen",
+                                "Lognormal" = "red",
+                                "Random Survival Forest" = "orange")) +
+  tema +
+  theme(legend.position = "bottom")
+
+# Interativo
+ggplotly(p_surv)
+
+```
+
+#### A análise comparativa das curvas de sobrevivência estimadas pelos métodos RSF, Kaplan-Meier e modelo paramétrico lognormal permite avaliar diferenças na sobrevida projetada e padrões de risco entre os pacientes. A curva **Kaplan-Meier**, que reflete a estimativa não paramétrica baseada nos dados observados, apresenta a sobrevida real da amostra ao longo do tempo, nota-se que nos primeiros anos a curva apresenta um comportamento decrescente dos números de óbitos, a partir dos 7 anos e meio aproximadamente houve um aumento, a partir desse ponto a probabilide de sobrevida pelos menos vai de 59% para 49% no intervalo de 1 ano , em 11 anos de acompanhamento foi para 33%. A curva obtida pelo **Random Survival Forest (RSF)** mostra tendência semelhante à KM, capturando padrões complexos das covariáveis, evidenciando que pacientes com características clínicas de maior risco apresentam queda mais acentuada na sobrevida. O RSF tende a suavizar pequenas flutuações, mantendo a forma geral da curva, mas refletindo melhor heterogeneidade individual, nota-se que na maior parte do tempo sobrepoem a curva do **modelo lognormal** Neste modelo, observa-se também que a queda na sobrevida ocorre de forma gradual no início e mais acelerada em períodos intermediários, refletindo a característica da distribuição lognormal, em ambos a probabilidade de sobrevida no primeiro ano de tratamento foi em torno de 90%, com o RSF demonstrando maior flutuação que o lognormal, os anos subsequentes onde uma varição muito semelhante, de 4-8,8-12 anos de tratamento, a probablidade variou respectivamente de 21% indo de (62% para 41%) e 10% (43% para 33%), se mantendo uma curva mais estivável.
+
+```{r, echo = F, warning= F, message= F, fig.height=12, fig.width= 12}
+library(survival)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+# -------------------------
+# 1. Kaplan-Meier
+# -------------------------
+km_model <- survfit(Surv(TempoCombinado, status) ~ 1, data = dados1)
+km_risk <- data.frame(
+  time = km_model$time,
+  risk = 1 - km_model$surv,  # 1 - S(t)
+  model = "Kaplan-Meier"
+)
+
+# -------------------------
+# 2. Nelson-Aalen (usando também 1 - S(t))
+# -------------------------
+na_model <- survfit(Surv(TempoCombinado, status) ~ 1, data = dados1, type = "fh")
+na_risk <- data.frame(
+  time = na_model$time,
+  risk = 1 - na_model$surv,  # agora padronizado como 1 - S(t)
+  model = "Nelson-Aalen"
+)
+
+# -------------------------
+# 3. Lognormal
+# -------------------------
+coef_log <- coef(modelo_lognormal1)  # Coeficientes (beta)
+sigma_log <- modelo_lognormal$scale  # Desvio padrão (sigma)
+
+times_log <- seq(1, max(dados1$TempoCombinado), length.out = 100)
+surv_mean <- numeric(length(times_log))
+
+for (t in 1:length(times_log)) {
+  survival_values <- numeric(nrow(dados1))
+  for (i in 1:nrow(dados1)) {
+    nova_obs <- dados1[i, ]
+    X <- model.matrix(~ idade_fator1 + 
+                        n_de_hormonio_fator1 + 
+                        n_de_radio_fator1 + 
+                        n_de_quimio_fator1 +
+                        n_de_hormonio_fator1 * n_de_radio_fator1, data = nova_obs)
+    survival_values[i] <- 1 - pnorm((log(times_log[t]) - sum(X * coef_log)) / sigma_log)
+  }
+  surv_mean[t] <- mean(survival_values)
+}
+
+lognorm_risk <- data.frame(
+  time = times_log,
+  risk = 1 - surv_mean,  # 1 - S(t)
+  model = "Lognormal"
+)
+
+# -------------------------
+# 4. Random Survival Forest (RSF)
+# -------------------------
+RF_risk <- data.frame(
+  time = fit2$time.interest,
+  risk = 1 - colMeans(fit2$survival),  # 1 - S(t)
+  model = "Random Survival Forest"
+)
+
+# -------------------------
+# 5. Combina todos os dados
+# -------------------------
+risk_data <- rbind(km_risk, lognorm_risk, RF_risk)
+
+# -------------------------
+# 6. Calcula tempo correspondente ao risco de 50% (aprox)
+# -------------------------
+medianas_risco <- risk_data %>%
+  group_by(model) %>%
+  summarise(mediana = approx(risk, time, xout = 0.5, rule = 2)$y)
+
+# -------------------------
+# 7. Gráfico ggplot
+# -------------------------
+p_risk <- ggplot(risk_data, aes(x = time/365, y = risk, color = model)) +
+  geom_step(data = km_risk, size = 1) +
+ # geom_step(data = na_risk, size = 1, linetype = "dotdash") +
+  geom_line(data = lognorm_risk, size = 1, linetype = "dashed") +
+  geom_line(data = RF_risk, size = 1, linetype = "dashed") +
+  
+  # Linha horizontal em 50% de falha
+  geom_hline(yintercept = 0.5, linetype = "dotted", color = "black") +
+  
+  # Linhas verticais para tempo mediano
+  geom_segment(data = medianas_risco,
+               aes(x = mediana/365, xend = mediana/365, y = 0, yend = 0.5, color = model),
+               linetype = "dashed") +
+  
+  labs(title = "Curvas de distribuição acumulada de Falha",
+       x = "Tempo (anos)",
+       y = "Probabilidade",
+       color = "Modelos") +
+  scale_x_continuous(breaks = seq(0, 15, 2)) +
+  scale_color_manual(values = c("Kaplan-Meier" = "blue",
+                                #"Nelson-Aalen" = "darkgreen",
+                                "Lognormal" = "red",
+                                "Random Survival Forest" = "orange")) +
+  tema +
+  theme(legend.position = "bottom")
+
+# Tornar interativo
+ggplotly(p_risk)
+
+```
+
+#### A análise do risco estimado pelos métodos RSF, Kaplan-Meier e modelo lognormal permite compreender a probabilidade de ocorrência do evento ao longo do tempo para os pacientes. No caso da **Kaplan-Meier**, o risco cumulativo aumenta gradualmente à medida que o tempo de acompanhamento avança, refletindo diretamente a proporção de pacientes que apresentam o evento em cada intervalo.
+
+#### O **Random Survival Forest (RSF)** fornece estimativas de risco individualizadas, considerando a influência combinada das covariáveis. Pacientes com fatores de risco mais elevados apresentam curvas de risco mais acentuadas, enquanto aqueles com características mais favoráveis apresentam risco baixo, evidenciando heterogeneidade dentro da população. O RSF capta relações complexas entre variáveis, destacando subgrupos com risco diferencial que podem não ser visíveis em análises não paramétricas.
+
+#### O **modelo lognormal**, paramétrico, estima o risco assumindo uma distribuição específica do tempo até o evento. Nesse modelo, o risco aumenta de forma gradual inicialmente e de maneira mais rápida em períodos intermediários, permitindo projeções além do período observado nos dados, o que é útil para avaliar a probabilidade de ocorrência do evento em horizontes de tempo mais longos.
