@@ -1,5 +1,5 @@
 ---
-title: "Analise de sobrevia (PIBIC)"
+title: "Modelos Preditivos para Óbitos em Pacientes com Câncer de Mama)"
 author: "fabio"
 date: "2025-05-05"
 format: 
@@ -17,7 +17,7 @@ pacotes <- c(
   "flexsurv", "ggRandomForests", "survminer", "readr", "readxl", "dplyr", 
   "ggplot2", "fBasics", "questionr", "timereg", "pracma", "tidyverse", 
   "lmtest", "GGally", "randomForestSRC", "gridExtra", "kableExtra", 
-  "plotly", "survcomp", "dplyr"
+  "plotly", "survcomp", "dplyr", "readr"
 )
 
 suppressMessages(
@@ -54,8 +54,7 @@ pacman::p_load(char = unique(pacotes))
 # carregando os dados -----------------------------------------------------
 
 #dados <- read_excel("analise de sobrevivência (PIBIC).xls") %>%  as.data.frame()
-dados = read_csv("C://Users//fabia//Downloads//Downloads//Downloads//analise de sobrevivência (PIBIC) (2).csv")
-
+dados = read_csv("analise de sobrevivência (PIBIC) (2).csv")
 
 #variáveis usadas para análise descritiva e modelagem
 dados$TempoConsulta <- as.numeric(dados$TempoConsulta)
@@ -1657,7 +1656,7 @@ plot_residuos <- function(res, titulo, ids_destaque) {
   
   ggplot(df, aes(x = id, y = residual)) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-    geom_point(aes(color = destaque)) +
+    geom_point(aes(color = destaque, size = 3)) +
     scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
     geom_text(aes(label = ifelse(destaque, id, id)), vjust = -0.7, size = 4.5) +
     labs(
@@ -1714,6 +1713,7 @@ modelo_lognormal1 <- survreg(
 #              statistic = c("std.error", "p.value"))
 
 ```
+
 ## Verificando se esses valores ajudam ou atrapalham o modelo
 
 ```{r,echo = F, warning= F, fig.height=12, fig.width= 12}
