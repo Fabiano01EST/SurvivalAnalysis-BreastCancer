@@ -1,0 +1,15 @@
+citHeader("Como citar este projeto:")
+
+citEntry(
+  entry    = "Manual",
+  title    = "Análise de Sobrevivência: Métodos Tradicionais e Machine Learning",
+  author   = "Fabiano Florentino",
+  year     = "2025",
+  note     = "Repositório GitHub",
+  url      = "https://github.com/Fabiano01EST/analise_sobrevivencia",
+  textVersion = paste(
+    "Florentino, F. (2025). Análise de Sobrevivência:",
+    "Métodos Tradicionais e Machine Learning.",
+    "Disponível em: https://github.com/Fabiano01EST/analise_sobrevivencia"
+  )
+)
